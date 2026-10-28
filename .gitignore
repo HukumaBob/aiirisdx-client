@@ -6,3 +6,6 @@ __pycache__/
 *.mp4
 .env
 sessions/
+dist/
+.pytest_cache/
+*.egg-info/

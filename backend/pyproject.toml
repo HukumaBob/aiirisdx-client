@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiirisdx-client"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "aiortc",
+  "av",
+  "numpy",
+  "opencv-python-headless",
+  "pydantic>=2",
+  "pydantic-settings",
+  "ultralytics",
+  "redis",
+  "celery",
+  "httpx",
+  "pytest",
+  "pytest-asyncio",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
