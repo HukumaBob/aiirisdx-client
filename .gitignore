@@ -1,0 +1,8 @@
+.superpowers/
+node_modules/
+.venv/
+__pycache__/
+*.pt
+*.mp4
+.env
+sessions/
