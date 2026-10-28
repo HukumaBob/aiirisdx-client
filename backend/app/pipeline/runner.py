@@ -35,8 +35,8 @@ class Pipeline:
         return {s.name: s.version for s in self.stages}
 
     def run(self, frame: np.ndarray, ref: FrameRef) -> FrameRecord:
-        ctx: dict = {"labels": {}, "classification": {}}
         detections: list[Detection] = []
+        ctx: dict = {"labels": {}, "classification": {}, "detections": detections}
         self.last_errors = []
         for stage in self.stages:
             try:

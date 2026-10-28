@@ -101,3 +101,17 @@ def test_model_versions():
     f = Fake("m")
     f.version = "2.1"
     assert Pipeline([f]).model_versions() == {"m": "2.1"}
+
+
+def test_ctx_exposes_detections_collected_so_far():
+    seen = []
+
+    class Spy(Fake):
+        def process(self, frame, ref, ctx):
+            seen.append([d.class_name for d in ctx["detections"]])
+            return super().process(frame, ref, ctx)
+
+    d = Detection(bbox=(0.1, 0.1, 0.2, 0.2), class_name="polyp", confidence=0.9)
+    rec = Pipeline([Fake("det", dets=[d]), Spy("spy")]).run(FRAME, ref())
+    assert seen == [["polyp"]]
+    assert len(rec.detections) == 1

@@ -19,6 +19,7 @@ dependencies = [
   "redis",
   "celery",
   "httpx",
+  "pyyaml",
   "pytest",
   "pytest-asyncio",
 ]

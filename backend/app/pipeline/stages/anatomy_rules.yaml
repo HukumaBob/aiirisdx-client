@@ -1,0 +1,21 @@
+# Anatomy rules for AnatomyStage.
+#
+# SCHEMA
+#   min_confidence: detection confidence threshold on a 0-100 scale (prototype:
+#                   AnatomicalVerifier / README use 50 for "verified"); detections
+#                   below it are ignored.
+#   findings:       <finding class_name>: [<zone label>, ...]  allowed zones.
+#                   A finding not listed here is unconstrained. A listed finding seen
+#                   in a zone outside its list gives anatomy_status "warning".
+#
+# PROVENANCE: EXAMPLE RULE SET ONLY. In the prototype (video_stream_project) the real
+# relations (AnatomicalRelation / AnatomicalOrder) live in a Django DB and no data is
+# in the repo. Class names below come from checkpoints/egds.json and colono.json;
+# the finding->zone pairing is an illustrative placeholder, NOT validated clinical
+# knowledge. Replace with the real exported relations before clinical use.
+min_confidence: 50
+findings:
+  columnar_metaplasia: [z_line, distal_oesophagus]      # example
+  ulceratio_oesophagus: [proximal_oesophagus, distal_oesophagus, z_line]  # example
+  sessile_polyp_0_Is: [rectum, colon_asc, colon_transversum, colon_desc, caecum, corpus_ventriculi, antrum]  # example
+  lst_g_homogeneous: [rectum, colon_asc, colon_transversum, colon_desc, caecum]  # example
