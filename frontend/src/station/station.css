@@ -1,0 +1,24 @@
+.station { font: 14px system-ui, sans-serif; color: #e8eaed; background: #14161a; min-height: 100vh; padding: 12px 16px; box-sizing: border-box; }
+.station header { display: flex; align-items: center; gap: 12px; }
+.station h1 { font-size: 18px; margin: 0; }
+.station .pill { padding: 2px 10px; border-radius: 10px; background: #2b3038; }
+.station .pill.running { background: #1d5c34; }
+.station .pill.server-lost, .station .pill.error { background: #7a2a1d; }
+.station .grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; margin-top: 12px; }
+.station .stage { position: relative; background: #000; aspect-ratio: 16 / 9; }
+.station .stage video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.station .crop-layer { position: absolute; inset: 0; touch-action: none; }
+.station .crop-rect { position: absolute; border: 2px solid #ffd54a; background: rgba(255, 213, 74, 0.12); pointer-events: none; box-sizing: border-box; }
+.station .statusline { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; color: #b8bdc6; }
+.station .warn { color: #ffb74d; }
+.station .err { color: #ff8a80; }
+.station .done { margin-top: 8px; padding: 8px; background: #1d2a22; }
+.station .controls { display: flex; flex-direction: column; gap: 10px; }
+.station label { display: flex; flex-direction: column; gap: 3px; }
+.station label.inline { flex-direction: row; align-items: center; gap: 6px; }
+.station fieldset { border: 1px solid #3a4049; display: flex; flex-direction: column; gap: 8px; }
+.station .row { display: flex; gap: 8px; align-items: center; }
+.station input, .station select, .station button { font: inherit; padding: 4px 6px; }
+.station button.primary { background: #2e7d32; color: #fff; border: 0; padding: 8px 20px; }
+.station button.stop { background: #c62828; color: #fff; border: 0; padding: 8px 20px; }
+@media (max-width: 900px) { .station .grid { grid-template-columns: 1fr; } }

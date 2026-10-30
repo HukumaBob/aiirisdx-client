@@ -1,3 +1,5 @@
+import { StationPage } from './station/StationPage'
+
 export default function App() {
-  return <h1>aiirisdx-client</h1>
+  return <StationPage />
 }
