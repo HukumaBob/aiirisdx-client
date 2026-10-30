@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -46,7 +47,12 @@ class FileSource:
         self.path = Path(path)
         self.realtime = realtime
         self.decode_errors = 0
+        self._stop = threading.Event()
         self.fps = self._probe()
+
+    def stop(self) -> None:
+        """Ask a running ``frames()`` to finish early (thread-safe; ends a pacing wait)."""
+        self._stop.set()
 
     # ------------------------------------------------------------------ opening
     def _open(self):
@@ -107,6 +113,8 @@ class FileSource:
             t0: float | None = None
             first_time: float | None = None
             for idx, vf in enumerate(self._decode(container, stream)):
+                if self._stop.is_set():
+                    return
                 if vf.time is None:
                     pts = idx / self.fps
                 else:
@@ -119,8 +127,8 @@ class FileSource:
                     if t0 is None:
                         t0 = now - pts
                     delay = t0 + pts - now
-                    if delay > 0:
-                        time.sleep(delay)
+                    if delay > 0 and self._stop.wait(delay):
+                        return
                     elif delay < -_REANCHOR_S:
                         t0 = now - pts  # fell far behind: re-anchor, do not burst
                 yield img, idx, pts
@@ -146,8 +154,17 @@ class FileIngest:
         source = await loop.run_in_executor(None, FileSource, self.path, self.realtime)
         it = source.frames()
         done = object()
+        # step() and close() run in executor threads; the lock makes close() wait for an
+        # in-flight step, so a cancelled run() never closes a generator that is executing
+        # ("ValueError: generator already executing" would mask CancelledError and leave
+        # the container open until GC).
+        lock = threading.Lock()
 
         def step():
+            with lock:
+                return _step()
+
+        def _step():
             item = next(it, done)
             if item is done:
                 return done
@@ -164,5 +181,12 @@ class FileIngest:
                 await self.sink.push(small, self.session_id, fid, pts, crop, prepared=True)
                 self.delivered_frames += 1
         finally:
-            await loop.run_in_executor(None, it.close)
+            source.stop()  # ends a realtime pacing wait promptly
+
+            def close() -> None:
+                with lock:
+                    it.close()
+
+            # the close runs to completion in its thread even if this await is cancelled again
+            await loop.run_in_executor(None, close)
         return self.delivered_frames

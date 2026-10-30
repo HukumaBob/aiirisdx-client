@@ -241,3 +241,50 @@ async def test_webrtc_frame_without_marker_is_skipped_not_misattributed(codec, s
         assert np.array_equal(frame[:band], np.broadcast_to(frame[0], frame[:band].shape))
     pts = [r.pts for _, r in got]
     assert pts == sorted(pts) and pts[0] >= 0.0
+
+
+def _open_fds_to(path: Path) -> int:
+    n = 0
+    for fd in Path("/proc/self/fd").iterdir():
+        try:
+            if Path(fd.readlink()) == path:
+                n += 1
+        except OSError:
+            pass
+    return n
+
+
+@pytest.mark.parametrize("realtime", [True, False])
+async def test_file_ingest_cancel_mid_iteration_closes_file(tmp_path, realtime, monkeypatch):
+    """Cancelling run() while the decode generator is executing in the executor must
+    raise CancelledError (not 'ValueError: generator already executing') and close the file."""
+    path = write_video(tmp_path / "cancel.mp4", 90, size=(1920, 1080))
+    loop = asyncio.get_running_loop()
+    seen: list[int] = []
+    task: asyncio.Task | None = None
+    real_frames = FileSource.frames
+
+    def slow_frames(self):  # keep the generator itself busy in the thread after frame 2
+        inner = real_frames(self)
+        try:
+            for item in inner:
+                if item[1] == 3:
+                    # cancel from inside the executing generator: guarantees the step is
+                    # in flight (generator running in its thread) when run() is cancelled
+                    loop.call_soon_threadsafe(task.cancel)
+                    time.sleep(0.3)
+                yield item
+        finally:
+            inner.close()  # propagate close() to the real generator (closes the container)
+
+    monkeypatch.setattr(FileSource, "frames", slow_frames)
+
+    def on_frame(frame, ref):
+        seen.append(ref.frame_id)
+
+    ingest = FileIngest(path, realtime=realtime, on_frame=on_frame, session=session_id())
+    task = asyncio.ensure_future(ingest.run())
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert seen == [0, 1, 2]
+    assert _open_fds_to(path.resolve()) == 0
