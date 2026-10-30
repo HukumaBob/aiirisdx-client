@@ -113,10 +113,10 @@ describe('AlignmentBuffer', () => {
   })
 
   it('bounds memory: overflow releases oldest with null', () => {
-    const b = new AlignmentBuffer(1000, 1000, { fps: 3 }) // max 3 frames
+    const b = new AlignmentBuffer(1000, 1000, { fps: 3 }) // max 3 (+2 slack) frames
     const got: Array<number | null> = []
     b.onReady((f, r) => got.push(r ? f.frameId : null))
-    for (let i = 0; i < 5; i++) b.pushFrame(i, bmp())
+    for (let i = 0; i < 7; i++) b.pushFrame(i, bmp())
     expect(got).toEqual([null, null])
     expect(b.stats.overflow).toBe(2)
     b.dispose()
@@ -162,4 +162,25 @@ describe('AlignmentBuffer', () => {
     expect(out[0][1]!.detections).toHaveLength(1)
     expect(buf.stats.timedOut).toBe(0)
   })
+
+  for (const [delay, timeout] of [[4000, 3000], [1000, 3000]]) {
+    it(`streaming 60 fps, delay ${delay} / timeout ${timeout}: every frame with a result keeps its boxes`, () => {
+      const b = new AlignmentBuffer(delay, timeout, { fps: 60 })
+      const got: Array<[number, FrameResult | null]> = []
+      b.onReady((f, r) => got.push([f.frameId, r]))
+      const N = 660 // 11 s
+      for (let i = 0; i < N; i++) {
+        b.pushFrame(i, bmp())
+        const id = i
+        setTimeout(() => b.pushResult(id, res(id)), 30) // result shortly after the push
+        vi.advanceTimersByTime(1000 / 60)
+      }
+      vi.advanceTimersByTime(delay + 1000)
+      expect(got).toHaveLength(N)
+      expect(got.every(([id, r]) => r !== null && r.frame_id === id)).toBe(true)
+      expect(b.stats.overflow).toBe(0)
+      expect(b.stats.timedOut).toBe(0)
+      b.dispose()
+    })
+  }
 })

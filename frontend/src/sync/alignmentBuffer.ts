@@ -75,7 +75,8 @@ export class AlignmentBuffer {
   private timer: unknown = null
   private lastPushed = -1
   private disposed = false
-  private readonly maxFrames: number
+  private maxFrames: number
+  private readonly fps: number
   private readonly clock: BufferClock
 
   constructor(
@@ -84,12 +85,20 @@ export class AlignmentBuffer {
     opts: { fps?: number; clock?: BufferClock } = {},
   ) {
     this.clock = opts.clock ?? defaultClock
-    this.maxFrames = Math.max(1, Math.ceil((timeoutMs / 1000) * (opts.fps ?? 60)))
+    this.fps = opts.fps ?? 60
+    this.maxFrames = this.cap()
   }
 
   setDelay(delayMs: number) {
     this.delayMs = delayMs
+    this.maxFrames = this.cap()
     this.pump()
+  }
+
+  /** memory bound: frames that can legitimately wait = max(delay, timeout) * fps */
+  private cap() {
+    // +2: timer jitter / a push landing just before the head is due must not evict it
+    return Math.max(1, Math.ceil((Math.max(this.delayMs, this.timeoutMs) / 1000) * this.fps) + 2)
   }
 
   onReady(cb: (frame: ReadyFrame, result: FrameResult | null) => void): () => void {
