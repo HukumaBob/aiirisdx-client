@@ -288,3 +288,39 @@ async def test_file_ingest_cancel_mid_iteration_closes_file(tmp_path, realtime, 
         await task
     assert seen == [0, 1, 2]
     assert _open_fds_to(path.resolve()) == 0
+
+
+async def test_on_closed_fires_when_connection_closes_unexpectedly():
+    closed: list[str] = []
+    ingest = WebRtcIngest(on_frame=lambda f, r: None, ice_servers=[], on_closed=closed.append)
+    client = RTCPeerConnection()
+    client.addTrack(ScriptedTrack([0, 1, 2]))
+    try:
+        await client.setLocalDescription(await client.createOffer())
+        answer = await ingest.handle_offer(client.localDescription.sdp, session_id())
+        await client.setRemoteDescription(RTCSessionDescription(sdp=answer, type="answer"))
+        # the peer connection dies on its own (not via ingest.close_session)
+        await ingest._sessions[session_id().uuid].pc.close()
+        for _ in range(50):
+            if closed:
+                break
+            await asyncio.sleep(0.05)
+        assert closed == [session_id().uuid]
+        assert ingest.session_stats(session_id().uuid) is None  # ingest cleaned the session up
+        # a deliberate close_session must not call the hook
+        closed.clear()
+        await client.close()
+        await ingest.handle_offer((await _fresh_offer()), session_id())
+        await ingest.close_session(session_id().uuid)
+        await asyncio.sleep(0.2)
+        assert closed == []
+    finally:
+        await client.close()
+        await ingest.close()
+
+
+async def _fresh_offer() -> str:
+    c = RTCPeerConnection()
+    c.addTrack(ScriptedTrack([0]))
+    await c.setLocalDescription(await c.createOffer())
+    return c.localDescription.sdp

@@ -37,6 +37,11 @@ the offer contains them (the marker experiment modelled H.264); ``None`` keeps a
 default negotiation. ICE servers (STUN/TURN) come from settings via ``ice_servers``; the
 default is none (host candidates only, e.g. inside the hospital LAN).
 
+Lifecycle: if the peer connection ends on its own (``failed`` / ``closed``, e.g. the
+browser tab was closed or the network dropped), the session is cleaned up and the optional
+``on_closed(session_id)`` callback is called once. It is not called for a deliberate
+``close_session`` / ``close``.
+
 Backpressure: frames are processed sequentially per session; aiortc's receive queue is
 unbounded, so processing must keep up with the frame rate (to_ndarray + resize of 1080p
 is a few ms). Overload is shed by the pool (drop-oldest), not here.
@@ -46,7 +51,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from aiortc import (RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCRtpSender,
@@ -97,7 +102,9 @@ def _ice_server(spec: IceServerSpec) -> RTCIceServer:
 
 class WebRtcIngest:
     def __init__(self, on_frame: OnFrame, ice_servers: Iterable[IceServerSpec] = (),
-                 video_codecs: Iterable[str] | None = None, max_side: int = MAX_SIDE):
+                 video_codecs: Iterable[str] | None = None, max_side: int = MAX_SIDE,
+                 on_closed: Callable[[str], None] | None = None):
+        self.on_closed = on_closed
         self.sink = FrameSink(on_frame, max_side)
         self.ice_servers = [_ice_server(s) for s in ice_servers]
         self.video_codecs = [c.lower() for c in video_codecs] if video_codecs else None
@@ -127,6 +134,13 @@ class WebRtcIngest:
         async def on_state() -> None:
             if pc.connectionState in ("failed", "closed"):
                 log.info("session %s: connection %s", sid, pc.connectionState)
+                if self._sessions.get(sid) is sess:  # not a deliberate close_session()
+                    await self.close_session(sid)
+                    if self.on_closed is not None:
+                        try:
+                            self.on_closed(sid)
+                        except Exception:
+                            log.exception("session %s: on_closed failed", sid)
 
         try:
             self._apply_codec_preferences(pc, sdp)
