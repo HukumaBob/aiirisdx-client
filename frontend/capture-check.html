@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Capture check</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 16px; background: #fafafa; color: #111; }
+      fieldset { margin: 8px 0; }
+      label { margin-right: 12px; }
+      input[type=number] { width: 6em; }
+      canvas, video { max-width: 100%; border: 1px solid #999; background: #000; }
+      pre { background: #eee; padding: 8px; white-space: pre-wrap; max-height: 40vh; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Capture check (dev only)</h1>
+    <p>
+      Opens a capture device (or a video file), stamps the frame-id marker on the send copy,
+      records the original locally and optionally sends the stamped copy to the backend
+      (<code>/api</code> is proxied by <code>npm run dev</code> to <code>AIIRIS_BACKEND</code>,
+      default <code>http://127.0.0.1:8000</code>).
+    </p>
+    <fieldset>
+      <legend>Source</legend>
+      <label>Device <select id="device"><option value="">(default)</option></select></label>
+      <label>or file <input id="file" type="file" accept="video/*" /></label>
+      <label>W <input id="w" type="number" value="1920" /></label>
+      <label>H <input id="h" type="number" value="1080" /></label>
+      <label>fps <input id="fps" type="number" value="30" /></label>
+    </fieldset>
+    <fieldset>
+      <legend>Recording / server</legend>
+      <label>crop x,y,w,h <input id="crop" placeholder="e.g. 320,0,1280,1080" /></label>
+      <label>stand <input id="stand" value="stand-1" /></label>
+      <label>token <input id="token" /></label>
+      <label>max bitrate kbps <input id="kbps" type="number" value="4000" /></label>
+      <label><input id="send" type="checkbox" checked /> send to server</label>
+      <label>seconds <input id="secs" type="number" value="20" /></label>
+    </fieldset>
+    <button id="run">Run check</button>
+    <button id="stopBtn" disabled>Stop early</button>
+    <h3>Stamped send copy</h3>
+    <div id="preview"></div>
+    <h3>Result</h3>
+    <pre id="out">-</pre>
+    <div id="download"></div>
+    <script type="module" src="/src/capture/manualCheck.ts"></script>
+  </body>
+</html>

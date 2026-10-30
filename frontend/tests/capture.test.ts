@@ -11,7 +11,7 @@ import {
   drawFrameId,
 } from '../src/capture/frameId'
 import { MemoryChunkSink } from '../src/capture/localRecorder'
-import { applySenderParams, connectSendStream, preferH264 } from '../src/capture/sender'
+import { applySenderParams, connectSendStream, preferH264, withBitrateHints } from '../src/capture/sender'
 import {
   FakeCanvas,
   FakeMedia,
@@ -293,5 +293,26 @@ describe('sender helpers', () => {
     preferH264(t as unknown as RTCRtpTransceiver, FakePeerConnection.capabilities as unknown as RTCRtpCapabilities)
     expect(t.codecPrefs![0].mimeType).toBe('video/H264')
     expect(t.codecPrefs).toHaveLength(4)
+  })
+
+  it('withBitrateHints adds x-google bitrate params to H.264 fmtp lines only', () => {
+    const sdp = [
+      'v=0',
+      'm=video 9 UDP/TLS/RTP/SAVPF 96 102 103',
+      'a=rtpmap:96 VP8/90000',
+      'a=rtpmap:102 H264/90000',
+      'a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f',
+      'a=rtpmap:103 H264/90000',
+      '',
+    ].join('\r\n')
+    const out = withBitrateHints(sdp, { minKbps: 1000, startKbps: 2000 })
+    const lines = out.split('\r\n')
+    expect(lines[4]).toBe(
+      'a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f;x-google-min-bitrate=1000;x-google-start-bitrate=2000',
+    )
+    // an H.264 payload without fmtp gets one; VP8 untouched
+    expect(lines).toContain('a=fmtp:103 x-google-min-bitrate=1000;x-google-start-bitrate=2000')
+    expect(out).not.toMatch(/fmtp:96/)
+    expect(withBitrateHints(out, { minKbps: 1000, startKbps: 2000 })).toBe(out) // idempotent
   })
 })

@@ -140,7 +140,8 @@ function ctx2d(c: HTMLCanvasElement): CanvasRenderingContext2D {
 
 export async function startCapture(deviceId: string, opts: CaptureOptions = {}): Promise<CaptureHandle> {
   const env: CaptureEnv = { ...browserEnv(), ...opts.env } as CaptureEnv
-  const video: MediaTrackConstraints = { deviceId: { exact: deviceId } }
+  // '' = the browser's default camera (manual checks); a capture card is always given by id
+  const video: MediaTrackConstraints = deviceId ? { deviceId: { exact: deviceId } } : {}
   if (opts.width) video.width = { ideal: opts.width }
   if (opts.height) video.height = { ideal: opts.height }
   if (opts.fps) video.frameRate = { ideal: opts.fps }
