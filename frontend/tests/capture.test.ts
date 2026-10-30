@@ -265,6 +265,50 @@ describe('local recorder', () => {
     expect(res2.frameTable.map((f) => f.frameId)).toEqual([12, 13])
   })
 
+  it('test_recording_survives_sink_write_failure', async () => {
+    const media = new FakeMedia()
+    const errors: string[] = []
+    const written: Blob[] = []
+    let calls = 0
+    const failingSink = {
+      async write(b: Blob) {
+        calls++
+        if (calls === 2) throw new Error('QuotaExceededError: disk full')
+        written.push(b)
+      },
+      async finish(mime: string) {
+        return new Blob(written, { type: mime })
+      },
+    }
+    handle = await startCapture('card-1', {
+      env: media.env(),
+      sinkFactory: () => failingSink,
+      onRecorderError: (m) => errors.push(m),
+    })
+    const h = handle
+    h.localRecorder.start()
+    media.emitFrames(3) // chunk 1 -> ok
+    await new Promise((r) => setTimeout(r, 0))
+    media.emitFrames(3) // chunk 2 -> sink write fails
+    await new Promise((r) => setTimeout(r, 0))
+    media.emitFrames(6) // chunks 3, 4 -> must still be kept
+    expect(h.localRecorder.state).toBe('recording')
+    const res = await h.localRecorder.stop()
+    expect(res.frameTable.map((f) => f.frameId)).toEqual([...Array(12).keys()])
+    expect(res.recordingStartOffset).toBeGreaterThanOrEqual(0)
+    expect(res.error).toMatch(/disk full/)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatch(/disk full/)
+    // chunk 1 from the failed sink + chunks 2..4 from the memory fallback, in order
+    expect(res.videoBlob.size).toBe(120)
+    expect(res.videoBlob.type).toBe('video/webm;codecs=vp9')
+    // the recorder is reusable afterwards
+    h.localRecorder.start()
+    media.emitFrames(3)
+    const res2 = await h.localRecorder.stop()
+    expect(res2.error).toBeUndefined()
+  })
+
   it('MemoryChunkSink accumulates chunks in order', async () => {
     const sink = new MemoryChunkSink()
     await sink.write(new Blob(['ab']))

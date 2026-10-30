@@ -56,6 +56,8 @@ export interface CaptureOptions {
   env?: Partial<CaptureEnv>
   /** where recorded chunks go (default: OPFS if available, else memory) */
   sinkFactory?: SinkFactory
+  /** recorder / sink failures (the recording continues; also in RecordingResult.error) */
+  onRecorderError?: (message: string) => void
   recordingTimesliceMs?: number
   recordingBitsPerSecond?: number
   /** an already opened stream (e.g. a video file's captureStream) instead of getUserMedia */
@@ -189,6 +191,7 @@ async function buildPipeline(source: MediaStream, env: CaptureEnv, opts: Capture
     sourceStream: source,
     sourceSize: () => ({ width, height }),
     sinkFactory: opts.sinkFactory,
+    onError: opts.onRecorderError,
     timesliceMs: opts.recordingTimesliceMs,
     videoBitsPerSecond: opts.recordingBitsPerSecond,
     createCropStream: (crop: CropRect): CropStream => {

@@ -8,7 +8,9 @@
  * - Container/codec: H.264 in MP4 if `MediaRecorder.isTypeSupported`, otherwise WebM VP9
  *   (then VP8, then plain WebM); the mimeType actually used is returned.
  * - Chunks: `start(timeslice = 1000 ms)`; every chunk goes to a `ChunkSink` -- OPFS (written
- *   incrementally to disk) when available, otherwise in memory.
+ *   incrementally to disk) when available, otherwise in memory. If a sink write fails (quota,
+ *   disk full, handle error) the failure is surfaced (`onError`, `RecordingResult.error`) and
+ *   the rest of the recording continues into memory; `stop()` still returns the result.
  * - Nothing here knows about signalling or WebRTC: losing the server connection cannot stop
  *   or alter the recording.
  *
@@ -153,6 +155,8 @@ export interface LocalRecorderDeps {
   sinkFactory?: SinkFactory
   timesliceMs?: number
   videoBitsPerSecond?: number
+  /** called for every recorder/sink failure; the recording keeps going where possible */
+  onError?: (message: string) => void
 }
 
 export function validateCrop(crop: CropRect, width: number, height: number): CropRect {
@@ -173,6 +177,8 @@ export class LocalRecorder {
   private crop: CropRect | null = null
   private cropStream: CropStream | null = null
   private sink: Promise<ChunkSink> | null = null
+  /** takes over (in memory) after the first failed write to `sink` */
+  private fallback: MemoryChunkSink | null = null
   private writes: Promise<void> = Promise.resolve()
   private table: FrameInfo[] = []
   private offset: number | null = null
@@ -208,20 +214,53 @@ export class LocalRecorder {
     this.offset = null
     this.error = undefined
     this.writes = Promise.resolve()
-    this.sink = Promise.resolve((this.deps.sinkFactory ?? defaultSinkFactory)())
-    const sink = this.sink
+    this.fallback = null
+    try {
+      this.sink = Promise.resolve((this.deps.sinkFactory ?? defaultSinkFactory)())
+    } catch (e) {
+      this.sink = Promise.reject(e)
+    }
+    this.sink.catch(() => undefined) // handled in writeChunk / stop
     rec.addEventListener('dataavailable', (ev) => {
       const data = (ev as BlobEvent).data
       if (!data || data.size === 0) return
-      this.writes = this.writes.then(async () => (await sink).write(data))
+      // writeChunk never rejects, so one failed write cannot poison the chain
+      this.writes = this.writes.then(() => this.writeChunk(data))
     })
     rec.addEventListener('error', (ev) => {
       const e = (ev as Event & { error?: { message?: string } }).error
-      this.error = e?.message ?? 'MediaRecorder error'
+      this.fail(e?.message ?? 'MediaRecorder error')
     })
     this.stopped = new Promise((resolve) => rec.addEventListener('stop', () => resolve()))
     this.rec = rec
     rec.start(this.deps.timesliceMs ?? 1000)
+  }
+
+  private fail(message: string): void {
+    this.error = this.error ? `${this.error}; ${message}` : message
+    try {
+      this.deps.onError?.(message)
+    } catch {
+      /* a listener bug must not break the recording */
+    }
+  }
+
+  /**
+   * Write one chunk to the sink. On the first failure (OPFS quota, disk full, handle error)
+   * the error is surfaced and this and all later chunks go to an in-memory fallback, so no
+   * chunk is lost; `stop()` concatenates the sink's part and the fallback's part in order.
+   */
+  private async writeChunk(data: Blob): Promise<void> {
+    if (!this.fallback) {
+      try {
+        await (await this.sink!).write(data)
+        return
+      } catch (e) {
+        this.fail(`recording sink write failed, continuing in memory: ${errMsg(e)}`)
+        this.fallback = new MemoryChunkSink()
+      }
+    }
+    await this.fallback.write(data)
   }
 
   /** Called by the capture pipeline once per source frame (after the crop canvas is drawn). */
@@ -235,13 +274,24 @@ export class LocalRecorder {
   async stop(): Promise<RecordingResult> {
     const rec = this.rec
     if (!rec || !this.sink || !this.stopped) throw new Error('recording not started')
-    if (rec.state !== 'inactive') rec.stop()
-    await this.stopped
-    await this.writes
-    const videoBlob = await (await this.sink).finish(this.mimeType)
-    this.cropStream?.dispose()
-    this.cropStream = null
-    this.rec = null
+    const parts: Blob[] = []
+    try {
+      if (rec.state !== 'inactive') rec.stop()
+      await this.stopped
+      await this.writes
+      try {
+        parts.push(await (await this.sink).finish(this.mimeType))
+      } catch (e) {
+        this.fail(`recording sink finish failed: ${errMsg(e)}`)
+      }
+      if (this.fallback) parts.push(await this.fallback.finish(this.mimeType))
+    } finally {
+      this.cropStream?.dispose()
+      this.cropStream = null
+      this.rec = null
+      this.fallback = null
+    }
+    const videoBlob = new Blob(parts, { type: this.mimeType })
     const res: RecordingResult = {
       videoBlob,
       mimeType: this.mimeType,
@@ -252,4 +302,8 @@ export class LocalRecorder {
     if (this.error) res.error = this.error
     return res
   }
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
 }
