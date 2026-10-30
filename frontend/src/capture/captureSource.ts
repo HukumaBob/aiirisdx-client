@@ -32,6 +32,8 @@ export interface CaptureEnv {
   /** ms, monotonic (performance.now) */
   now(): number
   MediaRecorder: typeof MediaRecorder
+  /** snapshot of the current source frame (default: global createImageBitmap) */
+  createImageBitmap?: (src: HTMLVideoElement) => Promise<ImageBitmap>
   requestAnimationFrame?: (cb: FrameRequestCallback) => number
   cancelAnimationFrame?: (id: number) => void
 }
@@ -43,6 +45,8 @@ export function browserEnv(): CaptureEnv {
     createCanvas: () => document.createElement('canvas'),
     now: () => performance.now(),
     MediaRecorder: globalThis.MediaRecorder,
+    createImageBitmap:
+      typeof globalThis.createImageBitmap === 'function' ? (v) => globalThis.createImageBitmap(v) : undefined,
     requestAnimationFrame: (cb) => requestAnimationFrame(cb),
     cancelAnimationFrame: (id) => cancelAnimationFrame(id),
   }
@@ -62,6 +66,12 @@ export interface CaptureOptions {
   recordingBitsPerSecond?: number
   /** an already opened stream (e.g. a video file's captureStream) instead of getUserMedia */
   sourceStream?: MediaStream
+  /**
+   * Secondary screen feed: called (asynchronously) with an UNSTAMPED snapshot of each source
+   * frame, taken BEFORE the marker is drawn, so detection boxes (normalized to the original
+   * frame) line up exactly. The receiver owns the bitmap and must close() it.
+   */
+  onFrameBitmap?: (frameId: number, bitmap: ImageBitmap) => void
 }
 
 export type FrameListener = (f: FrameInfo) => void
@@ -215,6 +225,14 @@ async function buildPipeline(source: MediaStream, env: CaptureEnv, opts: Capture
     const pts = Math.max((now - t0) / 1000, lastPts + 1e-6)
     lastPts = pts
     const f: FrameInfo = { frameId: counter++, pts }
+    if (opts.onFrameBitmap && env.createImageBitmap) {
+      // createImageBitmap snapshots the video frame at call time; resolution order is FIFO
+      const id = f.frameId
+      env.createImageBitmap(video).then(
+        (bm) => (running ? opts.onFrameBitmap!(id, bm) : bm.close?.()),
+        () => {},
+      )
+    }
     ctx.drawImage(video, 0, 0, width, height)
     drawFrameId(ctx, width, height, f.frameId)
     recorder.onFrame(f)

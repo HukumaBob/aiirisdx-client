@@ -360,3 +360,28 @@ describe('sender helpers', () => {
     expect(withBitrateHints(out, { minKbps: 1000, startKbps: 2000 })).toBe(out) // idempotent
   })
 })
+
+describe('onFrameBitmap hook (secondary screen source)', () => {
+  it('delivers an UNSTAMPED snapshot of the source frame per frame id', async () => {
+    const media = new FakeMedia()
+    const got: Array<[number, any]> = []
+    const env = media.env()
+    // snapshot = copy of the source video frame at call time (createImageBitmap semantics)
+    ;(env as any).createImageBitmap = async (src: any) => ({ snapshot: src.frame, close() {} })
+    const h = await startCapture('card-1', { env, onFrameBitmap: (id, bm) => got.push([id, bm]) })
+    media.emitFrames(3)
+    await new Promise((r) => setTimeout(r, 0))
+    h.stop()
+    expect(got.map((g) => g[0])).toEqual([0, 1, 2])
+    // the snapshot is the source frame itself: no marker rows were drawn into it
+    expect(got[0][1].snapshot).toBe(media.frames[0])
+    expect(got[2][1].snapshot).toBe(media.frames[2])
+  })
+  it('without createImageBitmap or hook nothing changes', async () => {
+    const media = new FakeMedia()
+    const h = await startCapture('card-1', { env: media.env() })
+    media.emitFrames(2)
+    h.stop()
+    expect(h.frameCount).toBe(2)
+  })
+})
