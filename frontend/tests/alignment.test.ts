@@ -130,4 +130,36 @@ describe('AlignmentBuffer', () => {
     vi.advanceTimersByTime(5000)
     expect(out).toHaveLength(0)
   })
+
+  it('delay >= timeout: a frame with its result is still released WITH boxes', () => {
+    const b = new AlignmentBuffer(4000, 3000)
+    const got: Array<FrameResult | null> = []
+    b.onReady((_f, r) => got.push(r))
+    b.pushFrame(1, bmp())
+    b.pushResult(1, res(1))
+    vi.advanceTimersByTime(3999)
+    expect(got).toHaveLength(0)
+    vi.advanceTimersByTime(1)
+    expect(got).toHaveLength(1)
+    expect(got[0]!.detections).toHaveLength(1)
+    expect(b.stats.timedOut).toBe(0)
+    // a frame WITHOUT a result still times out at timeoutMs
+    b.pushFrame(2, bmp())
+    vi.advanceTimersByTime(3000)
+    expect(got).toHaveLength(2)
+    expect(got[1]).toBeNull()
+    b.dispose()
+  })
+
+  it('setDelay above timeout keeps boxes for frames that have results', () => {
+    buf.pushFrame(1, bmp())
+    buf.pushResult(1, res(1))
+    buf.setDelay(5000)
+    vi.advanceTimersByTime(4999)
+    expect(out).toHaveLength(0)
+    vi.advanceTimersByTime(1)
+    expect(out).toHaveLength(1)
+    expect(out[0][1]!.detections).toHaveLength(1)
+    expect(buf.stats.timedOut).toBe(0)
+  })
 })

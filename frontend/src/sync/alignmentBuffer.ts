@@ -6,7 +6,9 @@
  * - result arrived and `delayMs` passed since the frame was pushed -> released with the result
  *   (constant latency => smooth playback even when results come early);
  * - `dropped:true` result -> same timing, released with result=null (no boxes);
- * - `timeoutMs` passed since the frame was pushed -> released with result=null.
+ * - `timeoutMs` passed since the frame was pushed WITHOUT a result -> released with result=null.
+ *   The timeout only bounds the wait for a missing result: a frame whose result is present is
+ *   always released with it once `delayMs` has passed, even if delayMs >= timeoutMs.
  * Results for frames that are not buffered (late, duplicate, unknown) are discarded and
  * counted -- a result is NEVER attached to another frame. A released frame's bitmap is
  * closed right after the onReady callbacks return, so callbacks must draw synchronously.
@@ -165,12 +167,12 @@ export class AlignmentBuffer {
       if (e.result !== undefined && age >= this.delayMs) {
         this.queue.shift()
         this.release(e, e.result)
-      } else if (age >= this.timeoutMs) {
+      } else if (e.result === undefined && age >= this.timeoutMs) {
         this.queue.shift()
         this.stats.timedOut++
         this.release(e, null)
       } else {
-        const wait = (e.result !== undefined ? Math.min(this.delayMs, this.timeoutMs) : this.timeoutMs) - age
+        const wait = (e.result !== undefined ? this.delayMs : this.timeoutMs) - age
         this.timer = this.clock.setTimeout(this.pump, Math.max(0, wait))
         return
       }
