@@ -57,6 +57,9 @@ export function sanitizeProfile(raw: unknown): DoctorProfile {
     soundEnabled: typeof o.soundEnabled === 'boolean' ? o.soundEnabled : DEFAULT_DOCTOR_PROFILE.soundEnabled,
     bufferDelayMs: clamp(o.bufferDelayMs, 0, 10000, DEFAULT_DOCTOR_PROFILE.bufferDelayMs),
   }
+  if (typeof o.bufferTimeoutMs === 'number' && Number.isFinite(o.bufferTimeoutMs)) {
+    p.bufferTimeoutMs = clamp(o.bufferTimeoutMs, 500, 30000, 3000)
+  }
   if (isObj(o.classThresholds)) {
     const ct: Record<string, number> = {}
     for (const [k, v] of Object.entries(o.classThresholds)) if (typeof v === 'number' && v >= 0 && v <= 1) ct[k] = v

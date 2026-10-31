@@ -12,6 +12,12 @@ export interface DoctorProfile {
   alertThreshold: number
   soundEnabled: boolean
   bufferDelayMs: number
+  /**
+   * secondary screen: longest wait for a frame's result while the server sends nothing for
+   * later frames either (unset = DEFAULT_BUFFER_TIMEOUT_MS). Gaps (frames that never get a
+   * result while later ones do) are released at the display delay, not at this timeout.
+   */
+  bufferTimeoutMs?: number
   classThresholds?: Record<string, number>
 }
 

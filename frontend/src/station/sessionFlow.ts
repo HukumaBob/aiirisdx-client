@@ -31,7 +31,11 @@ import { validateCrop } from './cropRect'
 
 export const SERVER_LOST_MSG = 'server lost — recording continues'
 export const SECONDARY_WIDTH = 960
-export const BUFFER_TIMEOUT_MS = 3000
+/** default secondary-screen result timeout (profile.bufferTimeoutMs overrides) */
+export const DEFAULT_BUFFER_TIMEOUT_MS = 3000
+/** @deprecated use DEFAULT_BUFFER_TIMEOUT_MS / profile.bufferTimeoutMs */
+export const BUFFER_TIMEOUT_MS = DEFAULT_BUFFER_TIMEOUT_MS
+const bufferTimeout = (p: DoctorProfile) => p.bufferTimeoutMs ?? DEFAULT_BUFFER_TIMEOUT_MS
 const STAND_RE = /^[A-Za-z0-9-]{1,32}$/
 
 export type FlowState = 'idle' | 'starting' | 'running' | 'server-lost' | 'stopping' | 'finished' | 'error'
@@ -344,7 +348,7 @@ export class SessionFlow {
       if (p.mode === 'file') throw e // nothing to record without the server
     }
     if (p.mode === 'file') {
-      this.buffer = this.deps.createBuffer(p.profile.bufferDelayMs, BUFFER_TIMEOUT_MS, 30)
+      this.buffer = this.deps.createBuffer(p.profile.bufferDelayMs, bufferTimeout(p.profile), 30)
       this.startResults()
       await this.http(`/sessions/${this.sessionId}/file`, { method: 'POST', body: { path: p.filePath, realtime: p.realtime ?? true } })
       this.set('running')
@@ -365,7 +369,7 @@ export class SessionFlow {
       const v = validateCrop(p.crop, cap.width, cap.height)
       if ('message' in v) throw new Error(`crop invalid: ${v.message}`)
     }
-    this.buffer = this.deps.createBuffer(p.profile.bufferDelayMs, BUFFER_TIMEOUT_MS, cap.fps > 0 ? cap.fps : 60)
+    this.buffer = this.deps.createBuffer(p.profile.bufferDelayMs, bufferTimeout(p.profile), cap.fps > 0 ? cap.fps : 60)
     cap.localRecorder.start(p.crop ?? null)
     if (this.sessionId) {
       this.startResults()
@@ -486,6 +490,9 @@ export class SessionFlow {
       if (out !== bm) bm.close?.()
       if (this.disposedBuffer || this.buffer !== buf) return out.close?.()
       buf.pushFrame(id, out as FrameBitmap)
+    }).catch((e) => {
+      // one failing push must not reject the chain (every later frame would be lost)
+      console.error('secondary screen: pushFrame failed', e)
     })
   }
 

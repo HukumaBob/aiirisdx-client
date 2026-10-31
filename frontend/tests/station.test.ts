@@ -475,4 +475,36 @@ describe('test_secondary_buffer_gets_downscaled_bitmaps_and_profile_delay', () =
     expect(t.buffer.pushResult).toHaveBeenCalledWith(3, expect.objectContaining({ frame_id: 3 }))
     expect(flow.getStatus()).toMatchObject({ received: 1, dropped: 1 })
   })
+  it('buffer timeout comes from the profile (default 3000 ms when unset)', async () => {
+    const t = setup()
+    await new SessionFlow(t.deps).start(params())
+    expect(t.createBuffer).toHaveBeenLastCalledWith(1500, 3000, 30)
+    const t2 = setup()
+    await new SessionFlow(t2.deps).start(params({ profile: { alertThreshold: 0.5, soundEnabled: true, bufferDelayMs: 800, bufferTimeoutMs: 5000 } }))
+    expect(t2.createBuffer).toHaveBeenLastCalledWith(800, 5000, 30)
+  })
+  it('one throwing pushFrame does not poison the frames after it', async () => {
+    const t = setup()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    t.buffer.pushFrame.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
+    const flow = new SessionFlow(t.deps)
+    await flow.start(params())
+    for (const id of [1, 2, 3]) t.captureOpts().onFrameBitmap!(id, { width: 640, close: vi.fn() } as unknown as ImageBitmap)
+    await vi.waitFor(() => expect(t.buffer.pushFrame).toHaveBeenCalledTimes(3))
+    expect(t.buffer.pushFrame.mock.calls.map((c) => c[0])).toEqual([1, 2, 3])
+    err.mockRestore()
+  })
+})
+
+describe('profile bufferTimeoutMs (C1: configurable, next to bufferDelayMs)', () => {
+  it('kept when valid, clamped to 500..30000, absent when not set', async () => {
+    const { sanitizeProfile } = await import('../src/station/profiles')
+    expect(sanitizeProfile({ bufferTimeoutMs: 4000 }).bufferTimeoutMs).toBe(4000)
+    expect(sanitizeProfile({ bufferTimeoutMs: 10 }).bufferTimeoutMs).toBe(500)
+    expect(sanitizeProfile({ bufferTimeoutMs: 1e9 }).bufferTimeoutMs).toBe(30000)
+    expect('bufferTimeoutMs' in sanitizeProfile({ bufferTimeoutMs: 'x' })).toBe(false)
+    expect('bufferTimeoutMs' in sanitizeProfile({})).toBe(false)
+  })
 })

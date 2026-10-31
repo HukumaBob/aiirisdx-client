@@ -10,7 +10,7 @@ import { SecondaryScreen, openSecondaryWindow } from '../secondary/SecondaryScre
 import { CropEditor } from './CropEditor'
 import type { CropRect } from './cropRect'
 import { StationStore } from './profiles'
-import { canStart, defaultDeps, SessionFlow, type FinishedSession, type FlowDeps, type FlowStatus } from './sessionFlow'
+import { canStart, defaultDeps, DEFAULT_BUFFER_TIMEOUT_MS, SessionFlow, type FinishedSession, type FlowDeps, type FlowStatus } from './sessionFlow'
 import './station.css'
 
 export interface StationPageProps {
@@ -279,6 +279,9 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
             <label className="inline"><input type="checkbox" checked={profile.soundEnabled} onChange={(e) => patchProfile({ soundEnabled: e.target.checked })} /> Звук</label>
             <label>Задержка вторичного экрана, мс
               <input type="number" min={0} max={10000} step={100} value={profile.bufferDelayMs} onChange={(e) => patchProfile({ bufferDelayMs: Number(e.target.value) })} />
+            </label>
+            <label title="сколько ждать результат кадра, если сервер молчит и для следующих кадров (применяется со следующего сеанса)">Ожидание результата, мс
+              <input type="number" min={500} max={30000} step={500} value={profile.bufferTimeoutMs ?? DEFAULT_BUFFER_TIMEOUT_MS} disabled={active} onChange={(e) => patchProfile({ bufferTimeoutMs: Number(e.target.value) })} />
             </label>
           </fieldset>
 
