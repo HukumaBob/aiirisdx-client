@@ -41,6 +41,10 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [deviceId, setDeviceId] = useState('')
   const [mode, setMode] = useState<'live' | 'file'>('live')
+  // live mode: the capture card / camera, or a video file from this computer played in the browser
+  const [liveSource, setLiveSource] = useState<'camera' | 'local'>('camera')
+  const [localFile, setLocalFile] = useState<File | null>(null)
+  const localRef = useRef<{ video: HTMLVideoElement; url: string } | null>(null)
   const [filePath, setFilePath] = useState('')
   const [realtime, setRealtime] = useState(true)
   const [cropOn, setCropOn] = useState(false)
@@ -132,7 +136,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       }
       return
     }
-    if (mode !== 'live' || !navigator.mediaDevices?.getUserMedia) {
+    if (mode !== 'live' || liveSource === 'local' || !navigator.mediaDevices?.getUserMedia) {
       v.srcObject = null
       setNegotiated(null)
       return
@@ -159,7 +163,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       cancelled = true
       stopPreview()
     }
-  }, [active, mode, deviceId, flow, stopPreview, refreshDevices, captureStream, captureFormat, deviceEpoch])
+  }, [active, mode, liveSource, deviceId, flow, stopPreview, refreshDevices, captureStream, captureFormat, deviceEpoch])
 
   // ---- doctor / profile
   const chooseDoctor = (name: string) => {
@@ -194,20 +198,46 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
     setFinished(null)
     setOutcome(null)
     if (!check.ok) return setError(`Укажите: ${check.reasons.map((r) => REASON_RU[r]).join(', ')}`)
+    if (mode === 'live' && liveSource === 'local' && !localFile) return setError('Выберите видеофайл')
     stopPreview()
     // the secondary screen popup must be opened from the click
-    if (!win || win.closed) setWin(openSecondaryWindow())
+    if (!showInPage && (!win || win.closed)) setWin(openSecondaryWindow())
     try {
+      let sourceStream: MediaStream | undefined
+      if (mode === 'live' && liveSource === 'local' && localFile) {
+        const url = URL.createObjectURL(localFile)
+        const video = document.createElement('video')
+        localRef.current = { video, url }
+        video.muted = true
+        video.playsInline = true
+        video.src = url
+        await new Promise<void>((res, rej) => {
+          video.onloadedmetadata = () => res()
+          video.onerror = () => rej(new Error('не удалось открыть видеофайл (формат не поддерживается браузером?)'))
+        })
+        sourceStream = (video as HTMLVideoElement & { captureStream(): MediaStream }).captureStream()
+        video.onended = () => void stop() // the file is over: finish the session
+        await video.play()
+      }
       await flow.start({
-        stand, doctor, deviceId, mode, profile, filePath, realtime, token,
+        stand, doctor, deviceId, mode, profile, filePath, realtime, token, sourceStream,
         width: captureFormat.width, height: captureFormat.height, fps: captureFormat.fps,
         crop: cropOn ? crop : null,
       })
       setStatus(flow.getStatus())
     } catch (e) {
+      releaseLocal()
       setError(e instanceof Error ? e.message : String(e))
       setStatus(flow.getStatus())
     }
+  }
+  const releaseLocal = () => {
+    const l = localRef.current
+    localRef.current = null
+    if (!l) return
+    l.video.onended = null
+    l.video.pause()
+    URL.revokeObjectURL(l.url)
   }
   const stop = async () => {
     try {
@@ -215,12 +245,13 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
+    releaseLocal()
     setStatus(flow.getStatus())
   }
   const reconnect = () => flow.reconnect().then(() => setStatus(flow.getStatus()), (e) => setError(String(e)))
 
   const secondary = flow.buffer && active ? (
-    <SecondaryScreen buffer={flow.buffer} profile={profile} crop={cropOn ? crop : null} sourceSize={flow.capture ? { width: flow.capture.width, height: flow.capture.height } : null} win={win} />
+    <SecondaryScreen buffer={flow.buffer} profile={profile} crop={cropOn ? crop : null} sourceSize={flow.capture ? { width: flow.capture.width, height: flow.capture.height } : null} win={showInPage ? null : win} />
   ) : null
 
   return (
@@ -319,17 +350,23 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
 
           <fieldset disabled={active}>
             <legend>Источник</legend>
-            <label className="inline"><input type="radio" checked={mode === 'live'} onChange={() => setMode('live')} /> Видео со стойки</label>
-            <label className="inline"><input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} /> Видеофайл на сервере</label>
+            <label className="inline"><input type="radio" checked={mode === 'live' && liveSource === 'camera'} onChange={() => { setMode('live'); setLiveSource('camera') }} /> Видео со стойки</label>
+            <label className="inline"><input type="radio" checked={mode === 'live' && liveSource === 'local'} onChange={() => { setMode('live'); setLiveSource('local') }} /> Видеофайл с этого компьютера</label>
+            <label className="inline"><input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} /> Видеофайл на сервере (без показа)</label>
+            {mode === 'live' && liveSource === 'local' && (
+              <label>Файл
+                <input type="file" accept="video/*" data-testid="local-file" onChange={(e) => setLocalFile(e.target.files?.[0] ?? null)} />
+              </label>
+            )}
             {mode === 'live' ? (
               <>
-              <label>Устройство захвата
+              {liveSource === 'camera' && <label>Устройство захвата
                 <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
                   {devices.length === 0 && <option value="">нет устройств</option>}
                   {devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `Камера ${i + 1}`}</option>)}
                 </select>
-              </label>
-              <label>Формат захвата (запрашиваемый)
+              </label>}
+              {liveSource === 'camera' && <label>Формат захвата (запрашиваемый)
                 <select data-testid="capture-format" value={presetId(captureFormat) ?? 'custom'} onChange={(e) => {
                   const p = CAPTURE_PRESETS.find((x) => x.id === e.target.value)
                   if (!p) return
@@ -340,7 +377,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
                   {CAPTURE_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                   {!presetId(captureFormat) && <option value="custom">{`${captureFormat.width}×${captureFormat.height}, ${captureFormat.fps} к/с`}</option>}
                 </select>
-              </label>
+              </label>}
               </>
             ) : (
               <>

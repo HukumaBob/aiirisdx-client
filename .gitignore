@@ -11,3 +11,4 @@ dist/
 *.egg-info/
 tests/load/.cache/
 .playwright-mcp/
+/media/

@@ -57,6 +57,12 @@ export interface StartParams {
   fps?: number
   /** stand token (X-Stand-Token / ?token=) when the server requires one; overrides deps.token */
   token?: string
+  /**
+   * live mode only: an already opened stream (a local video file played in the browser) instead
+   * of the camera. It goes through the same capture pipeline: frame ids, recording, secondary
+   * screen. Its end is the file's end, not a lost signal.
+   */
+  sourceStream?: MediaStream
 }
 
 export function canStart(p: Pick<StartParams, 'stand' | 'doctor' | 'mode' | 'filePath'>): { ok: boolean; reasons: ('stand' | 'doctor' | 'file')[] } {
@@ -368,12 +374,14 @@ export class SessionFlow {
       width: p.width,
       height: p.height,
       fps: p.fps,
+      sourceStream: p.sourceStream,
       onRecorderError: (m) => {
         this.recorderError = m
         this.emit()
       },
       onFrameBitmap: (id, bm) => this.onBitmap(id, bm),
       onSourceEnded: () => {
+        if (p.sourceStream) return // the file ended: the page stops the session
         this.sourceLost = true
         this.emit()
       },
