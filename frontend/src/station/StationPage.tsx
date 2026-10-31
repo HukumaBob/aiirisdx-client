@@ -225,9 +225,10 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
 
   return (
     <div className="station">
-      <header>
-        <h1>aiirisdx-client</h1>
+      <header className="topbar">
+        <h1><img src="/logo.svg" alt="" className="logo" /><span className="sr-only">aiirisdx-client</span></h1>
         <span className={`pill ${status.state}`} data-testid="state">{STATE_RU[status.state]}</span>
+        <span className="who">{[stand.trim(), doctor.trim()].filter(Boolean).join(' · ')}</span>
       </header>
       <div className="grid">
         <section className="video">

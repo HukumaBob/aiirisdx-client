@@ -10,3 +10,4 @@ dist/
 .pytest_cache/
 *.egg-info/
 tests/load/.cache/
+.playwright-mcp/
