@@ -89,6 +89,9 @@ class Session:
     closed: bool = False
     frames: int = 0
     crop: CropRect | None = None
+    # one ingest kind per session (frame ids restart at 0 in file mode): None until the first
+    # accepted /offer ("webrtc"; re-offers allowed) or /file ("file"; only one file)
+    ingest_kind: str | None = None
     file_task: asyncio.Task | None = None
     file_ingest: FileIngest | None = None
     file_error: str | None = None
@@ -257,10 +260,18 @@ async def offer(session_id: str, body: OfferBody, request: Request):
         raise HTTPException(409, "session is stopped")
     if body.type != "offer":
         raise HTTPException(400, "type must be 'offer'")
+    if s.ingest_kind == "file":
+        raise HTTPException(409, "this session processes a video file; a WebRTC offer needs a "
+                                 "new session")
+    prev, s.ingest_kind = s.ingest_kind, "webrtc"  # claim before awaiting (no /file race)
     try:
         sdp = await core.ingest.handle_offer(body.sdp, s.key, s.crop)
     except IngestError as e:
+        s.ingest_kind = prev
         raise HTTPException(400, str(e)) from e
+    except BaseException:
+        s.ingest_kind = prev
+        raise
     return {"sdp": sdp, "type": "answer"}
 
 
@@ -277,13 +288,25 @@ async def start_file(session_id: str, body: FileBody, request: Request):
     path = (root / body.path).resolve()  # absolute body.path replaces root; symlinks resolved
     if not path.is_relative_to(root):
         raise HTTPException(403, "path outside the allowed directory")
-    if s.file_task is not None and not s.file_task.done():
-        raise HTTPException(409, "a file is already being processed")
+    if s.ingest_kind == "webrtc":
+        raise HTTPException(409, "this session is a live WebRTC session; a video file needs a "
+                                 "new session")
+    if s.ingest_kind == "file":
+        # frame ids restart at 0 per file: a second file would duplicate ids in the log
+        raise HTTPException(409, "a video file was already started in this session; create a "
+                                 "new session for another file")
+    s.ingest_kind = "file"  # claim before awaiting (no concurrent /file or /offer)
     loop = asyncio.get_running_loop()
     try:  # validate now so a bad file is a 400, not a silent background failure
         await loop.run_in_executor(None, FileSource, path, body.realtime)
     except IngestError as e:
+        s.ingest_kind = None
         raise HTTPException(400, str(e)) from e
+    except BaseException:
+        s.ingest_kind = None
+        raise
+    if s.closed:
+        raise HTTPException(409, "session is stopped")
     ing = FileIngest(path, body.realtime, core.on_frame, s.key,
                      crop=s.crop, max_side=core.settings.max_side)
     s.file_ingest = ing
