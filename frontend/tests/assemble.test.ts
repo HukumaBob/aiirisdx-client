@@ -215,6 +215,62 @@ describe('deliver', () => {
   })
 })
 
+describe('deliver: realistic sizes and status handling (I3)', () => {
+  it('attempt timeout scales with the size: 30 s base + size at 1 MB/s, capped', async () => {
+    const { uploadTimeoutMs } = await import('../src/container/deliver')
+    expect(uploadTimeoutMs(1000)).toBe(30_000 + 1)
+    expect(uploadTimeoutMs(2e9)).toBe(30_000 + 2_000_000) // ~2 GB -> ~33.8 min
+    expect(uploadTimeoutMs(1e12)).toBe(4 * 3600_000) // cap
+    expect(uploadTimeoutMs(2e9, { minBytesPerSec: 4e6 })).toBe(30_000 + 500_000)
+  })
+  it('a 2 GB upload that takes 20 min is NOT aborted (old 30 s whole-upload timeout always aborted)', async () => {
+    vi.useFakeTimers()
+    const big = { size: 2e9, type: 'application/zip' } as unknown as Blob
+    let aborted = false
+    const f = vi.fn((_u: string, init: RequestInit) => new Promise<Response>((res, rej) => {
+      init.signal!.addEventListener('abort', () => ((aborted = true), rej(new Error('aborted'))))
+      setTimeout(() => res({ ok: true, status: 200 } as Response), 20 * 60_000)
+    }))
+    const p = deliver(big, 'u', { fetch: f as never, filename: 'a.zip', onFallbackSave: () => {} })
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    expect(await p).toEqual({ delivered: true })
+    expect(aborted).toBe(false)
+    expect(f).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+  it('a hanging upload is aborted at the scaled deadline', async () => {
+    vi.useFakeTimers()
+    const big = { size: 1e8, type: 'application/zip' } as unknown as Blob // 100 MB -> 130 s
+    const f = vi.fn((_u: string, init: RequestInit) => new Promise<Response>((_, rej) => init.signal!.addEventListener('abort', () => rej(new Error('aborted')))))
+    const p = deliver(big, 'u', { fetch: f as never, retries: 0, filename: 'a.zip', onFallbackSave: () => {} })
+    await vi.advanceTimersByTimeAsync(129_999)
+    let done = false
+    void p.then(() => (done = true))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await p).toMatchObject({ delivered: false, error: expect.stringMatching(/aborted/) })
+    vi.useRealTimers()
+  })
+  for (const status of [400, 401, 403, 404, 413, 422]) {
+    it(`HTTP ${status} is not retried`, async () => {
+      const f = vi.fn(async () => ({ ok: false, status }) as Response)
+      const save = vi.fn()
+      const r = await deliver(blob4(), 'u', { fetch: f as never, backoffMs: 1, filename: 'a.zip', onFallbackSave: save })
+      expect(f).toHaveBeenCalledTimes(1)
+      expect(r).toMatchObject({ delivered: false, error: expect.stringContaining(String(status)), savedLocally: true })
+    })
+  }
+  for (const status of [408, 429, 500, 503]) {
+    it(`HTTP ${status} is retried`, async () => {
+      const f = vi.fn(async () => ({ ok: false, status }) as Response)
+      await deliver(blob4(), 'u', { fetch: f as never, backoffMs: 1, filename: 'a.zip', onFallbackSave: () => {} })
+      expect(f).toHaveBeenCalledTimes(4)
+    })
+  }
+})
+const blob4 = () => new Blob(['zip'], { type: 'application/zip' })
+
 describe('buildAndDeliver', () => {
   const fin = (over: object = {}) => ({
     video: video(), mimeType: 'video/webm', frameTable: table([0, 1, 2]), recordingStartOffset: 0, log: goodLog,
