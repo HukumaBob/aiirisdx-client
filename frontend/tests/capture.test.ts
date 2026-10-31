@@ -385,3 +385,34 @@ describe('onFrameBitmap hook (secondary screen source)', () => {
     expect(h.frameCount).toBe(2)
   })
 })
+
+describe('capture format (C3)', () => {
+  it('startCapture asks for 1080p30 by default (Chrome would otherwise open ~640x480)', async () => {
+    const media = new FakeMedia()
+    await capture(media)
+    expect(media.gumCalls[0].video).toEqual({
+      deviceId: { exact: 'card-1' },
+      width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 },
+    })
+  })
+  it('a stand override is passed through; preview and capture build identical constraints', async () => {
+    const { videoConstraints } = await import('../src/capture/captureFormat')
+    const media = new FakeMedia()
+    handle = await startCapture('card-1', { env: media.env(), width: 1280, height: 720, fps: 60 })
+    expect(media.gumCalls[0].video).toEqual(videoConstraints('card-1', { width: 1280, height: 720, fps: 60 }))
+    expect(media.gumCalls[0].video).toMatchObject({ width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } })
+    expect(videoConstraints('')).toEqual({ width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } })
+  })
+  it('negotiated settings and warnings', async () => {
+    const { negotiatedOf, formatWarning, sanitizeFormat } = await import('../src/capture/captureFormat')
+    const st = (s: object) => ({ getVideoTracks: () => [{ getSettings: () => s }] }) as unknown as MediaStream
+    expect(negotiatedOf(st({ width: 1920, height: 1080, frameRate: 30 }))).toEqual({ width: 1920, height: 1080, fps: 30 })
+    expect(negotiatedOf(st({}))).toBeNull()
+    expect(formatWarning({ width: 1920, height: 1080, fps: 30 })).toBeNull()
+    expect(formatWarning({ width: 1280, height: 720, fps: 30 })).toBeNull()
+    expect(formatWarning({ width: 640, height: 480, fps: 30 })).toMatch(/< 1280/)
+    expect(formatWarning({ width: 320, height: 240, fps: 30 })).toMatch(/< 640/)
+    expect(sanitizeFormat({ width: 1280, height: 720, fps: 60 })).toEqual({ width: 1280, height: 720, fps: 60 })
+    expect(sanitizeFormat({ width: 'x', fps: 1000 })).toEqual({ width: 1920, height: 1080, fps: 30 })
+  })
+})

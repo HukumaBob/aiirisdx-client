@@ -19,6 +19,7 @@
  * session). `pts` = seconds since capture start on the performance clock (the video-frame
  * callback's `now`), forced monotonic.
  */
+import { videoConstraints } from './captureFormat'
 import { drawFrameId, MAX_FRAME_ID } from './frameId'
 import { LocalRecorder, type CropRect, type CropStream, type FrameInfo, type SinkFactory } from './localRecorder'
 
@@ -53,9 +54,11 @@ export function browserEnv(): CaptureEnv {
 }
 
 export interface CaptureOptions {
+  /** requested (ideal) source size; default 1920x1080 (captureFormat.DEFAULT_CAPTURE_FORMAT) */
   width?: number
   height?: number
-  /** requested source frame rate and captureStream rate (default: source's, else 30) */
+  /** requested (ideal) source frame rate (default 30) and captureStream rate (default: the
+   * source's negotiated rate, else 30) */
   fps?: number
   env?: Partial<CaptureEnv>
   /** where recorded chunks go (default: OPFS if available, else memory) */
@@ -152,11 +155,9 @@ function ctx2d(c: HTMLCanvasElement): CanvasRenderingContext2D {
 
 export async function startCapture(deviceId: string, opts: CaptureOptions = {}): Promise<CaptureHandle> {
   const env: CaptureEnv = { ...browserEnv(), ...opts.env } as CaptureEnv
-  // '' = the browser's default camera (manual checks); a capture card is always given by id
-  const video: MediaTrackConstraints = deviceId ? { deviceId: { exact: deviceId } } : {}
-  if (opts.width) video.width = { ideal: opts.width }
-  if (opts.height) video.height = { ideal: opts.height }
-  if (opts.fps) video.frameRate = { ideal: opts.fps }
+  // '' = the browser's default camera (manual checks); a capture card is always given by id.
+  // Same constraints as the stand page's preview (captureFormat.ts): 1080p30 unless overridden
+  const video = videoConstraints(deviceId, { width: opts.width, height: opts.height, fps: opts.fps })
   const source = opts.sourceStream ?? (await env.getUserMedia({ video, audio: false }))
   try {
     return await buildPipeline(source, env, opts)

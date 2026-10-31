@@ -52,3 +52,51 @@ describe('preview video during a session', () => {
     expect(play).toHaveBeenCalled()
   })
 })
+
+describe('capture format on the stand page (C3)', () => {
+  const stream = (w: number, h: number, fps: number) =>
+    ({ getVideoTracks: () => [{ getSettings: () => ({ width: w, height: h, frameRate: fps }) }], getTracks: () => [{ stop: vi.fn() }] }) as unknown as MediaStream
+  function mockMedia(s: MediaStream) {
+    const getUserMedia = vi.fn(async () => s)
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [{ kind: 'videoinput', deviceId: 'card-1', label: 'Card' }],
+        addEventListener: () => {}, removeEventListener: () => {},
+      },
+    })
+    return getUserMedia
+  }
+  afterEach(() => {
+    vi.restoreAllMocks()
+    localStorage.clear()
+    delete (navigator as unknown as { mediaDevices?: unknown }).mediaDevices
+  })
+
+  it('preview requests 1080p30 for the device and shows the negotiated size; Start passes the same format to the capture', async () => {
+    const gum = mockMedia(stream(1920, 1080, 30))
+    const { deps } = setup(true)
+    render(<StationPage deps={deps} />)
+    await waitFor(() => expect(gum).toHaveBeenCalledWith({ video: { deviceId: { exact: 'card-1' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false }))
+    await waitFor(() => expect(screen.getByTestId('negotiated')).toHaveTextContent('1920×1080, 30 к/с'))
+    expect(screen.getByTestId('negotiated').querySelector('.warn')).toBeNull()
+    await start()
+    const sc = (deps as unknown as { startCapture: ReturnType<typeof vi.fn> }).startCapture
+    expect(sc).toHaveBeenCalledWith('card-1', expect.objectContaining({ width: 1920, height: 1080, fps: 30 }))
+  })
+
+  it('warns when the browser opened a small mode; a stand override is stored and used', async () => {
+    const gum = mockMedia(stream(640, 480, 30))
+    const { deps } = setup(true)
+    render(<StationPage deps={deps} />)
+    await waitFor(() => expect(screen.getByTestId('negotiated')).toHaveTextContent('640×480'))
+    expect(screen.getByTestId('negotiated')).toHaveTextContent('< 1280')
+    fireEvent.change(screen.getByTestId('capture-format'), { target: { value: '720p30' } })
+    await waitFor(() => expect(gum).toHaveBeenLastCalledWith({ video: expect.objectContaining({ width: { ideal: 1280 }, height: { ideal: 720 } }), audio: false }))
+    expect(JSON.parse(localStorage.getItem('aiiris.station')!).capture).toEqual({ width: 1280, height: 720, fps: 30 })
+    await start()
+    const sc = (deps as unknown as { startCapture: ReturnType<typeof vi.fn> }).startCapture
+    expect(sc).toHaveBeenCalledWith('card-1', expect.objectContaining({ width: 1280, height: 720, fps: 30 }))
+  })
+})

@@ -5,6 +5,7 @@
  * (private mode, blocked site data, quota). Then the store keeps working in memory and
  * `persisted` is false.
  */
+import { DEFAULT_CAPTURE_FORMAT, sanitizeFormat, type CaptureFormat } from '../capture/captureFormat'
 import type { DoctorProfile } from '../secondary/alertLogic'
 
 export const STORAGE_KEY = 'aiiris.station'
@@ -78,10 +79,12 @@ export interface StationData {
   emrUrl: string
   /** stand token for a server with AIIRIS_REQUIRE_TOKEN; empty = none */
   token: string
+  /** requested capture format of this stand's card (preview + capture), default 1080p30 */
+  capture: CaptureFormat
 }
 
 export function emptyData(): StationData {
-  return { version: STORAGE_VERSION, stand: '', doctors: [], lastDoctor: '', profiles: {}, emrUrl: '', token: '' }
+  return { version: STORAGE_VERSION, stand: '', doctors: [], lastDoctor: '', profiles: {}, emrUrl: '', token: '', capture: { ...DEFAULT_CAPTURE_FORMAT } }
 }
 
 export function cleanDoctorName(name: string): string {
@@ -102,6 +105,7 @@ export function migrate(raw: string | null): StationData {
   if (typeof j.stand === 'string') d.stand = j.stand.trim().slice(0, 32)
   if (typeof j.emrUrl === 'string') d.emrUrl = j.emrUrl.trim().slice(0, 512)
   if (typeof j.token === 'string') d.token = j.token.trim().slice(0, 256)
+  if (isObj(j.capture)) d.capture = sanitizeFormat(j.capture)
   // v0 stored doctors as objects {name, ...profile}; v1 as names + a profiles map
   const profiles = isObj(j.profiles) ? j.profiles : {}
   if (Array.isArray(j.doctors)) {
@@ -150,6 +154,14 @@ export class StationStore {
   }
   setToken(token: string) {
     this.data.token = token.trim().slice(0, 256)
+    this.save()
+  }
+
+  get capture(): CaptureFormat {
+    return { ...this.data.capture }
+  }
+  setCapture(f: CaptureFormat) {
+    this.data.capture = sanitizeFormat(f)
     this.save()
   }
 

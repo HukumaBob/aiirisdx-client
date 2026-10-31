@@ -4,6 +4,7 @@
  * screen. All logic lives in profiles.ts / cropRect.ts / sessionFlow.ts; this is the view.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CAPTURE_PRESETS, formatWarning, negotiatedOf, presetId, videoConstraints, type Negotiated } from '../capture/captureFormat'
 import { buildAndDeliver, type ContainerOutcome } from '../container/finish'
 import { downloadBlob } from '../container/deliver'
 import { SecondaryScreen, openSecondaryWindow } from '../secondary/SecondaryScreen'
@@ -51,6 +52,8 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   const [finished, setFinished] = useState<FinishedSession | null>(null)
   const [emrUrl, setEmrUrl] = useState(store.emrUrl)
   const [token, setToken] = useState(store.token)
+  const [captureFormat, setCaptureFormat] = useState(store.capture)
+  const [negotiated, setNegotiated] = useState<Negotiated | null>(null)
   const emrUrlRef = useRef(emrUrl)
   emrUrlRef.current = emrUrl
   const [outcome, setOutcome] = useState<ContainerOutcome | null>(null)
@@ -112,20 +115,27 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       stopPreview()
       // changing srcObject resets paused=true: play() again (also autoPlay on the element)
       v.srcObject = captureStream
-      if (captureStream) void v.play?.()?.catch?.(() => {})
+      if (captureStream) {
+        setNegotiated(negotiatedOf(captureStream))
+        void v.play?.()?.catch?.(() => {})
+      }
       return
     }
     if (mode !== 'live' || !navigator.mediaDevices?.getUserMedia) {
       v.srcObject = null
+      setNegotiated(null)
       return
     }
     let cancelled = false
+    // the SAME constraints as the capture (captureFormat.ts): the crop is drawn on the
+    // geometry that will be recorded and sent
     navigator.mediaDevices
-      .getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: false })
+      .getUserMedia({ video: videoConstraints(deviceId, captureFormat), audio: false })
       .then((s) => {
         if (cancelled) return s.getTracks().forEach((t) => t.stop())
         stopPreview()
         previewRef.current = s
+        setNegotiated(negotiatedOf(s))
         v.srcObject = s
         void v.play().catch(() => {})
         void refreshDevices() // labels appear once permission is granted
@@ -135,7 +145,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       cancelled = true
       stopPreview()
     }
-  }, [active, mode, deviceId, flow, stopPreview, refreshDevices, captureStream])
+  }, [active, mode, deviceId, flow, stopPreview, refreshDevices, captureStream, captureFormat])
 
   // ---- doctor / profile
   const chooseDoctor = (name: string) => {
@@ -176,6 +186,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
     try {
       await flow.start({
         stand, doctor, deviceId, mode, profile, filePath, realtime, token,
+        width: captureFormat.width, height: captureFormat.height, fps: captureFormat.fps,
         crop: cropOn ? crop : null,
       })
       setStatus(flow.getStatus())
@@ -212,6 +223,12 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
               <CropEditor frameW={frameSize.w} frameH={frameSize.h} crop={crop} onChange={setCrop} disabled={active} onError={setCropError} />
             )}
           </div>
+          {mode === 'live' && (
+            <div className="statusline" data-testid="negotiated">
+              <span title="что браузер реально открыл (track.getSettings())">захват: {negotiated ? `${negotiated.width}×${negotiated.height}${negotiated.fps ? `, ${Math.round(negotiated.fps * 10) / 10} к/с` : ''}` : '—'}</span>
+              {formatWarning(negotiated) && <strong className="warn" role="status">{formatWarning(negotiated)}</strong>}
+            </div>
+          )}
           <div className="statusline" data-testid="statusline">
             <span>соединение: {status.connection}</span>
             <span>результаты: {status.results}</span>
@@ -290,12 +307,26 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
             <label className="inline"><input type="radio" checked={mode === 'live'} onChange={() => setMode('live')} /> Видео со стойки</label>
             <label className="inline"><input type="radio" checked={mode === 'file'} onChange={() => setMode('file')} /> Видеофайл на сервере</label>
             {mode === 'live' ? (
+              <>
               <label>Устройство захвата
                 <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
                   {devices.length === 0 && <option value="">нет устройств</option>}
                   {devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `Камера ${i + 1}`}</option>)}
                 </select>
               </label>
+              <label>Формат захвата (запрашиваемый)
+                <select data-testid="capture-format" value={presetId(captureFormat) ?? 'custom'} onChange={(e) => {
+                  const p = CAPTURE_PRESETS.find((x) => x.id === e.target.value)
+                  if (!p) return
+                  setCaptureFormat(p.format)
+                  store.setCapture(p.format)
+                  setCrop(null) // a crop belongs to one geometry
+                }}>
+                  {CAPTURE_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  {!presetId(captureFormat) && <option value="custom">{`${captureFormat.width}×${captureFormat.height}, ${captureFormat.fps} к/с`}</option>}
+                </select>
+              </label>
+              </>
             ) : (
               <>
                 <label>Путь к файлу (относительно корня на сервере)
