@@ -67,6 +67,7 @@ log = logging.getLogger(__name__)
 __all__ = ["WebRtcIngest", "IngestError", "SessionStats"]
 
 IceServerSpec = RTCIceServer | dict | str
+_ENDED_STATS_MAX = 256
 
 
 @dataclass
@@ -109,6 +110,8 @@ class WebRtcIngest:
         self.ice_servers = [_ice_server(s) for s in ice_servers]
         self.video_codecs = [c.lower() for c in video_codecs] if video_codecs else None
         self._sessions: dict[str, _Session] = {}
+        # stats of ended connections stay readable (bounded) for diagnostics after /stop
+        self._ended_stats: dict[str, SessionStats] = {}
         self.received_frames = 0
         self.delivered_frames = 0
         self.skipped_frames = 0
@@ -155,6 +158,9 @@ class WebRtcIngest:
         sess = self._sessions.pop(session_id, None)
         if sess is None:
             return
+        self._ended_stats[session_id] = sess.stats
+        while len(self._ended_stats) > _ENDED_STATS_MAX:
+            self._ended_stats.pop(next(iter(self._ended_stats)))
         await sess.pc.close()
         for t in sess.tasks:
             t.cancel()
@@ -165,8 +171,14 @@ class WebRtcIngest:
             await self.close_session(sid)
 
     def session_stats(self, session_id: str) -> SessionStats | None:
+        """Counters of the session's live connection; None if it has none."""
         sess = self._sessions.get(session_id)
         return sess.stats if sess else None
+
+    def last_stats(self, session_id: str) -> SessionStats | None:
+        """Counters of the live connection, else of the last ended one (diagnostics after
+        /stop; the most recent ``_ENDED_STATS_MAX`` ended connections are kept)."""
+        return self.session_stats(session_id) or self._ended_stats.get(session_id)
 
     # ------------------------------------------------------------------ internals
     def _apply_codec_preferences(self, pc: RTCPeerConnection, offer_sdp: str) -> None:

@@ -217,3 +217,34 @@ def test_shutdown_closes_open_logs_incomplete(tmp_path):
     _, _, complete = read_log(Path(s.sessions_dir) / sid / "log.jsonl")
     assert complete is False
     assert '"footer"' in (Path(s.sessions_dir) / sid / "log.jsonl").read_text()
+
+
+def test_health_endpoint(client_factory):
+    c = client_factory()
+    r = c.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "workers": 1, "models": {"fast": "t1"}, "sessions_open": 0}
+
+
+def test_session_status_tracks_file_progress(client_factory, tmp_path):
+    c = client_factory(require_token=True, stand_tokens={"s1": "k"})
+    write_video(tmp_path / "media" / "v.mp4", 15)
+    h = {"X-Stand-Token": "k"}
+    sid = c.post("/sessions", json={"stand": "s1"}, headers=h).json()["session_id"]
+    assert c.get(f"/sessions/{sid}").status_code == 401
+    st = c.get(f"/sessions/{sid}", headers=h).json()
+    assert st["file"] == "none" and st["submitted"] == 0 and st["webrtc"] is None
+    assert c.post(f"/sessions/{sid}/file", json={"path": "v.mp4", "realtime": False},
+                  headers=h).status_code == 200
+    import time
+    deadline = time.monotonic() + 30
+    while True:
+        st = c.get(f"/sessions/{sid}", headers=h).json()
+        if st["file"] == "done" and st["logged"] == st["submitted"]:
+            break
+        assert time.monotonic() < deadline, st
+        time.sleep(0.05)
+    assert st["file_frames"] == 15 and st["submitted"] == 15 and st["file_error"] is None
+    assert c.post(f"/sessions/{sid}/stop", headers=h).json()["frames"] == 15
+    assert c.get(f"/sessions/{sid}", headers=h).json()["closed"] is True
+    assert c.get("/sessions/nope_20260101T000000_" + "0" * 32).status_code == 404

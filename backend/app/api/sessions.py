@@ -90,6 +90,8 @@ class Session:
     frames: int = 0
     crop: CropRect | None = None
     file_task: asyncio.Task | None = None
+    file_ingest: FileIngest | None = None
+    file_error: str | None = None
     subscribers: set[Subscriber] = field(default_factory=set)
 
 
@@ -284,17 +286,66 @@ async def start_file(session_id: str, body: FileBody, request: Request):
         raise HTTPException(400, str(e)) from e
     ing = FileIngest(path, body.realtime, core.on_frame, s.key,
                      crop=s.crop, max_side=core.settings.max_side)
-    s.file_task = asyncio.create_task(_run_file(ing, s.session_id))
+    s.file_ingest = ing
+    s.file_error = None
+    s.file_task = asyncio.create_task(_run_file(ing, s))
     return {"started": True}
 
 
-async def _run_file(ing: FileIngest, session_id: str) -> None:
+async def _run_file(ing: FileIngest, s: Session) -> None:
     try:
         await ing.run()
     except asyncio.CancelledError:
         raise
-    except Exception:
-        log.exception("file ingest failed for %s", session_id)
+    except Exception as e:
+        s.file_error = str(e) or type(e).__name__
+        log.exception("file ingest failed for %s", s.session_id)
+
+
+def _file_state(s: Session) -> str:
+    t = s.file_task
+    if t is None:
+        return "none"
+    if not t.done():
+        return "running"
+    if t.cancelled():
+        return "cancelled"
+    return "failed" if s.file_error else "done"
+
+
+@router.get("/health")
+def health(request: Request):
+    """Liveness/readiness for container healthchecks: the app and its pool are up.
+    No auth (it reveals only model versions and counters, no session data)."""
+    core = core_of(request)
+    return {"status": "ok", "workers": core.settings.workers, "models": core.models,
+            "sessions_open": sum(1 for s in core.sessions.values() if not s.closed)}
+
+
+@router.get("/sessions/{session_id}")
+def session_status(session_id: str, request: Request):
+    """Progress counters of a live session (used by e2e/acceptance tests and diagnostics).
+
+    ``submitted``: frames handed to the pool; ``logged``: records written to the log (real or
+    dropped). ``file``: video-file mode state (none|running|done|failed|cancelled);
+    ``file_frames``: frames the file ingest delivered. ``webrtc``: ingest counters of the live
+    stream (``received == delivered + skipped_unreadable + skipped_stale``), null if none.
+    A file session is finished when ``file`` is ``done`` and ``logged == submitted``.
+    """
+    core = core_of(request)
+    s = live_session(session_id, request)
+    st = core.ingest.last_stats(s.key)
+    ing = s.file_ingest
+    return {
+        "session_id": s.session_id, "closed": s.closed,
+        "submitted": s.submitted, "logged": s.logged,
+        "file": _file_state(s), "file_error": s.file_error,
+        "file_frames": ing.delivered_frames if ing is not None else 0,
+        "webrtc": None if st is None else {
+            "received": st.received, "delivered": st.delivered,
+            "skipped_unreadable": st.skipped_unreadable, "skipped_stale": st.skipped_stale,
+            "last_id": st.last_id},
+    }
 
 
 @router.post("/sessions/{session_id}/stop")

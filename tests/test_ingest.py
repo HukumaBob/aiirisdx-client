@@ -307,6 +307,7 @@ async def test_on_closed_fires_when_connection_closes_unexpectedly():
             await asyncio.sleep(0.05)
         assert closed == [session_id().uuid]
         assert ingest.session_stats(session_id().uuid) is None  # ingest cleaned the session up
+        assert ingest.last_stats(session_id().uuid) is not None  # counters kept for diagnostics
         # a deliberate close_session must not call the hook
         closed.clear()
         await client.close()
