@@ -3,8 +3,8 @@
 Backend: FastAPI (`backend/`), frontend: React + Vite (`frontend/`).
 
 ```
-python3 -m venv backend/.venv && backend/.venv/bin/pip install -e backend
-backend/.venv/bin/pytest -q
+uv sync --project backend        # creates backend/.venv from backend/uv.lock
+uv run --project backend pytest -q
 cd frontend && npm install && npm test && npm run build
 ```
 
@@ -14,13 +14,13 @@ joining the log to the video (by `frame_id` only): [docs/container-format.md](do
 ## Tests
 
 ```
-backend/.venv/bin/pytest -q                 # from the repo root (pytest.ini: pythonpath=backend)
+uv run --project backend pytest -q          # from the repo root (pytest.ini: pythonpath=backend)
 cd frontend && npx vitest run && npx tsc -b # unit tests + type check (npm run build also builds)
 ```
 
 Prerequisites and what needs external assets:
 
-* Backend: the venv from above (`pip install -e backend` brings FastAPI, aiortc, PyAV,
+* Backend: the uv environment from above (`uv sync --project backend` brings FastAPI, aiortc, PyAV,
   OpenCV, numpy, ultralytics (+ torch), pytest, pytest-asyncio). Tests spawn worker processes (multiprocessing *spawn*);
   no GPU needed -- all pool/API tests use fast fake pipelines.
 * `tests/test_frame_id.py`: the H.264 bitrate gate tests use PyAV via `pytest.importorskip("av")`
@@ -149,5 +149,5 @@ server). Each worker is a process with its own model copy; workers warm up
 (`AIIRIS_WARMUP_FRAMES`) before `/health` reports `ready`.
 
 **Acceptance.** With the stack up: `AIIRIS_E2E_BASE_URL=http://localhost:8080/api
-AIIRIS_E2E_MEDIA_DIR=$PWD/deploy/media backend/.venv/bin/pytest -q tests/e2e`.
+AIIRIS_E2E_MEDIA_DIR=$PWD/deploy/media uv run --project backend pytest -q tests/e2e`.
 Station page in a real browser: `frontend/scripts/station-e2e.cjs --url http://localhost:8080/ --accounting`.
