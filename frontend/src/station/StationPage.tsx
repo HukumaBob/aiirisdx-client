@@ -231,11 +231,12 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
           )}
           {finished && (
             <div className="done" data-testid="container-status">
-              {!outcome ? 'Контейнер: сборка…' : outcome.delivery === 'no-recording' ? `Контейнер не собран: ${outcome.error}` : (
+              {!outcome ? 'Контейнер: сборка…' : outcome.delivery === 'no-recording' || (outcome.delivery === 'failed' && !outcome.blob) ? `Контейнер не собран и файлы не сохранены: ${outcome.error}` : (
                 <>
                   {outcome.delivery === 'delivered' && 'Контейнер: доставлен в EMR'}
-                  {outcome.delivery === 'saved' && 'Контейнер: готов (URL EMR не задан)'}
-                  {outcome.delivery === 'failed' && `Контейнер: сохранён локально — доставка не удалась: ${outcome.error}`}
+                  {outcome.delivery === 'ready' && 'Контейнер: готов (URL EMR не задан)'}
+                  {outcome.delivery === 'failed' && (outcome.savedLocally ? `Контейнер: сохранён локально — доставка не удалась: ${outcome.error}` : `Контейнер: НЕ доставлен и НЕ сохранён автоматически — используйте кнопку «Сохранить контейнер»: ${outcome.error}`)}
+                  {outcome.delivery === 'raw-saved' && `Контейнер не собран — сырые файлы сохранены (видео, таблица кадров, лог): ${outcome.error}`}
                   {!outcome.logComplete && <strong className="warn"> — лог неполный{finished.log === null ? ' (сервер потерян)' : ''}</strong>}
                   {outcome.blob && <> <button type="button" onClick={() => downloadBlob(outcome.blob!, outcome.filename)}>Сохранить контейнер</button></>}
                 </>

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { assembleContainer, containerFilename, type ContainerMeta } from '../src/container/assemble'
 import { deliver } from '../src/container/deliver'
 import { parseLog } from '../src/container/logParse'
+import { createZip } from '../src/container/zip'
 
 const header = JSON.stringify({ type: 'header', schema_version: '1.0', session: { stand: 's1', started_at: '2026-10-30T10:00:00', uuid: 'u-1' }, doctor: 'Иванов', crop: null, models: {}, taxonomy_version: 't' })
 const frame = (id: number, dropped = false) => JSON.stringify({ type: 'frame', frame_id: id, pts: id / 30, detections: [], classification: {}, dropped })
@@ -213,7 +214,7 @@ describe('buildAndDeliver', () => {
   it('server lost: log null -> container still built, logComplete false, saved without EMR url', async () => {
     const { buildAndDeliver } = await import('../src/container/finish')
     const r = await buildAndDeliver(fin({ log: null, error: 'server: down' }), '')
-    expect(r).toMatchObject({ delivery: 'saved', logComplete: false, filename: 's1_20261030T100000_u-1.zip' })
+    expect(r).toMatchObject({ delivery: 'ready', savedLocally: false, logComplete: false, filename: 's1_20261030T100000_u-1.zip' })
     expect((await manifestOf(r.blob!)).errors).toEqual(expect.arrayContaining(['server: down']))
   })
   it('delivery failure reports failed and keeps the blob', async () => {
@@ -224,5 +225,81 @@ describe('buildAndDeliver', () => {
     expect(r).toMatchObject({ delivery: 'failed', logComplete: true })
     expect(r.blob).not.toBeNull()
     expect(save).toHaveBeenCalled()
+  })
+})
+
+describe('ZIP64', () => {
+  const run = (zip: Uint8Array, code: string) => {
+    const d = mkdtempSync(join(tmpdir(), 'zipt-'))
+    const p = join(d, 'c.zip')
+    writeFileSync(p, zip)
+    return execFileSync('python3', ['-I', '-c', code, p], { encoding: 'utf8', maxBuffer: 1 << 26 })
+  }
+  const check = `
+import sys, zipfile, hashlib
+z = zipfile.ZipFile(sys.argv[1])
+assert z.testzip() is None
+for i in z.infolist(): print(i.filename, i.file_size, i.extract_version)
+print(hashlib.sha256(z.read('video.mp4')).hexdigest())`
+  it('test_zip64_forced_small_input: forced ZIP64 (entry sizes, offsets, EOCD64) is read by Python zipfile with valid CRCs', async () => {
+    const v = video()
+    const z = await createZip(
+      [{ name: 'video.mp4', data: v }, { name: 'a.json', data: '{"a":1}' }, { name: 'b.json', data: 'x'.repeat(300) }],
+      { zip64Threshold: 100 },
+    )
+    const zb = await bytes(z)
+    expect(new TextDecoder('latin1').decode(zb)).toContain('PK\x06\x06') // ZIP64 EOCD present
+    const out = run(zb, check).trim().split('\n')
+    expect(out.slice(0, 3)).toEqual(['video.mp4 1000 45', 'a.json 7 45', 'b.json 300 45'])
+    const { createHash } = await import('node:crypto')
+    expect(out[3]).toBe(createHash('sha256').update(await bytes(v)).digest('hex'))
+  })
+  it('only the offset is big for a late small entry; threshold 0 forces everything', async () => {
+    const z = await createZip([{ name: 'video.mp4', data: video() }, { name: 'a.json', data: 'hi' }], { zip64Threshold: 500 })
+    expect(run(await bytes(z), check)).toContain('a.json 2')
+    const z0 = await createZip([{ name: 'video.mp4', data: video() }], { zip64Threshold: 0 })
+    expect(run(await bytes(z0), check)).toContain('video.mp4 1000 45')
+  })
+  it('small archives stay plain ZIP (no ZIP64 records)', async () => {
+    const zb = await bytes(await createZip([{ name: 'video.mp4', data: video() }]))
+    expect(new TextDecoder('latin1').decode(zb)).not.toContain('PK\x06\x06')
+    expect(run(zb, check)).toContain('video.mp4 1000 20')
+  })
+  // A Blob reporting > 4 GiB cannot be tested without reading it (CRC needs every byte): skipped on purpose.
+})
+
+describe('last-resort raw fallback', () => {
+  const fin = (over: object = {}) => ({
+    video: video(), mimeType: 'video/mp4', frameTable: table([0, 1]), recordingStartOffset: 0, log: goodLog,
+    sessionMeta: { sessionId: 's1_20261030T100000_u-1', stand: 's1', doctor: 'Иванов', mode: 'live', crop: null, startedAt: '2026-10-30T10:00:00', stoppedAt: '', framesSent: 3, framesReceived: 3, serverFrames: 3 },
+    error: null, recorderError: null, ...over,
+  }) as never
+  const boom = async () => { throw new Error('zip: too large') }
+  it('assembly failure: video, frame table and log are handed to the download, one at a time, with an accurate outcome', async () => {
+    const { buildAndDeliver } = await import('../src/container/finish')
+    const save = vi.fn()
+    const r = await buildAndDeliver(fin(), 'http://emr', { assemble: boom as never, onFallbackSave: save })
+    expect(save.mock.calls.map((c) => c[1])).toEqual([
+      's1_20261030T100000_u-1.video.mp4', 's1_20261030T100000_u-1.frame_table.json', 's1_20261030T100000_u-1.log.jsonl',
+    ])
+    expect(r).toMatchObject({ delivery: 'raw-saved', savedLocally: true, blob: null })
+    expect(r.error).toMatch(/zip: too large/)
+  })
+  it('log null: only video + frame table; nothing saved -> not claimed as saved', async () => {
+    const { buildAndDeliver } = await import('../src/container/finish')
+    const ok = vi.fn()
+    await buildAndDeliver(fin({ log: null }), '', { assemble: boom as never, onFallbackSave: ok })
+    expect(ok).toHaveBeenCalledTimes(2)
+    const bad = vi.fn(() => { throw new Error('disk full') })
+    const r = await buildAndDeliver(fin(), '', { assemble: boom as never, onFallbackSave: bad })
+    expect(r).toMatchObject({ delivery: 'failed', savedLocally: false })
+    expect(r.error).toMatch(/disk full/)
+  })
+  it('delivery failure whose local save also failed: savedLocally=false', async () => {
+    const { buildAndDeliver } = await import('../src/container/finish')
+    const f = vi.fn(async () => ({ ok: false, status: 500 }) as Response)
+    const r = await buildAndDeliver(fin(), 'http://emr', { fetch: f as never, retries: 0, onFallbackSave: () => { throw new Error('nope') } })
+    expect(r).toMatchObject({ delivery: 'failed', savedLocally: false })
+    expect(r.blob).not.toBeNull()
   })
 })

@@ -19,6 +19,8 @@ export interface DeliverOpts {
 export interface DeliverResult {
   delivered: boolean
   error?: string
+  /** the fallback save was actually handed to the download (only meaningful when delivered=false) */
+  savedLocally?: boolean
 }
 
 export function downloadBlob(blob: Blob, filename: string) {
@@ -61,10 +63,12 @@ export async function deliver(container: Blob, emrUrl: string, opts: DeliverOpts
   } catch (e) {
     lastErr = msg(e)
   }
+  let savedLocally = false
   try {
     ;(opts.onFallbackSave ?? downloadBlob)(container, opts.filename)
+    savedLocally = true
   } catch (e) {
     lastErr += `; local save failed: ${msg(e)}`
   }
-  return { delivered: false, error: lastErr }
+  return { delivered: false, error: lastErr, savedLocally }
 }
