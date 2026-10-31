@@ -35,7 +35,8 @@ the 16x16 block grid of the marker no longer lines up and every frame reads as `
 Codec: ``video_codecs`` (e.g. ``["video/H264"]``) restricts the answer to those codecs if
 the offer contains them (the marker experiment modelled H.264); ``None`` keeps aiortc's
 default negotiation. ICE servers (STUN/TURN) come from settings via ``ice_servers``; the
-default is none (host candidates only, e.g. inside the hospital LAN).
+default is none (host candidates only, e.g. inside the hospital LAN). ``ice_servers`` may be
+a callable, evaluated for every offer (fresh time-limited TURN credentials).
 
 Lifecycle: if the peer connection ends on its own (``failed`` / ``closed``, e.g. the
 browser tab was closed or the network dropped), the session is cleaned up and the optional
@@ -102,12 +103,15 @@ def _ice_server(spec: IceServerSpec) -> RTCIceServer:
 
 
 class WebRtcIngest:
-    def __init__(self, on_frame: OnFrame, ice_servers: Iterable[IceServerSpec] = (),
+    def __init__(self, on_frame: OnFrame,
+                 ice_servers: Iterable[IceServerSpec] | Callable[[], Iterable[IceServerSpec]] = (),
                  video_codecs: Iterable[str] | None = None, max_side: int = MAX_SIDE,
                  on_closed: Callable[[str], None] | None = None):
         self.on_closed = on_closed
         self.sink = FrameSink(on_frame, max_side)
-        self.ice_servers = [_ice_server(s) for s in ice_servers]
+        # a callable is evaluated per offer (e.g. fresh time-limited TURN credentials)
+        self._ice_fn = ice_servers if callable(ice_servers) else None
+        self.ice_servers = [] if self._ice_fn else [_ice_server(s) for s in ice_servers]
         self.video_codecs = [c.lower() for c in video_codecs] if video_codecs else None
         self._sessions: dict[str, _Session] = {}
         # stats of ended connections stay readable (bounded) for diagnostics after /stop
@@ -123,7 +127,8 @@ class WebRtcIngest:
         sid = session_key(session)
         if sid in self._sessions:
             await self.close_session(sid)
-        pc = RTCPeerConnection(RTCConfiguration(iceServers=self.ice_servers))
+        ice = [_ice_server(x) for x in self._ice_fn()] if self._ice_fn else self.ice_servers
+        pc = RTCPeerConnection(RTCConfiguration(iceServers=ice))
         sess = _Session(sid, pc, crop)
         self._sessions[sid] = sess
 

@@ -2,7 +2,8 @@
 
 Complex values are JSON in the environment, e.g.
 ``AIIRIS_STAND_TOKENS='{"stand-1": "s3cret"}'``, ``AIIRIS_ICE_SERVERS='[{"urls": "stun:..."}]'``,
-``AIIRIS_PIPELINE='[{"name": "crop"}, {"name": "yolo_detect", "params": {"weights": "w.pt"}}]'``.
+``AIIRIS_PIPELINE='[{"name": "crop"}, {"name": "yolo_detect", "params": {"weights": "w.pt"}}]'``,
+``AIIRIS_TURN_URLS='["turn:turn.example:3478?transport=udp"]'`` + ``AIIRIS_TURN_SECRET``.
 
 Default pipeline (``AIIRIS_PIPELINE`` unset): ``crop``, ``yolo_detect`` (only if
 ``AIIRIS_DETECT_WEIGHTS`` is set; otherwise skipped, no model is loaded), ``yolo_classify``
@@ -44,12 +45,26 @@ class Settings(BaseSettings):
     workers: int = Field(default=1, ge=1)
     queue_size: int = Field(default=8, ge=1)
 
-    ice_servers: list[dict] = Field(default_factory=list)
+    ice_servers: list[dict] = Field(default_factory=list)  # static, used by server and clients
+    # TURN (coturn ``use-auth-secret``): time-limited credentials are derived per request from
+    # the shared secret (TURN REST API scheme) for both the server's peer and the browsers.
+    turn_urls: list[str] = Field(default_factory=list)  # e.g. ["turn:turn.example:3478"]
+    turn_secret: str | None = None
+    turn_ttl: int = Field(default=86400, ge=60)  # seconds a credential is valid
     video_codecs: list[str] | None = None
     max_side: int = 960
 
     ws_queue_size: int = Field(default=64, ge=1)  # per-subscriber results buffer
     drain_timeout: float = 3.0  # seconds /stop waits for in-flight results
+
+    def ice_servers_now(self, user: str = "aiiris") -> list[dict]:
+        """Static ``ice_servers`` plus TURN with fresh credentials (if configured)."""
+        out = [dict(x) for x in self.ice_servers]
+        if self.turn_urls and self.turn_secret:
+            username, credential = turn_credentials(self.turn_secret, self.turn_ttl, user)
+            out.append({"urls": list(self.turn_urls), "username": username,
+                        "credential": credential})
+        return out
 
     def pipeline_config(self) -> list[dict]:
         if self.pipeline is not None:
@@ -60,6 +75,20 @@ class Settings(BaseSettings):
         cfg.append({"name": "yolo_classify", "params": {"weights": self.classify_weights}})
         cfg.append({"name": "anatomy"})
         return cfg
+
+
+def turn_credentials(secret: str, ttl: int, user: str, now: float | None = None
+                     ) -> tuple[str, str]:
+    """TURN REST API credentials (coturn ``use-auth-secret``/``static-auth-secret``):
+    username ``"<expiry unix time>:<user>"``, password ``base64(HMAC-SHA1(secret, username))``."""
+    import base64
+    import hashlib
+    import hmac
+    import time
+
+    username = f"{int((time.time() if now is None else now) + ttl)}:{user}"
+    digest = hmac.new(secret.encode(), username.encode(), hashlib.sha1).digest()
+    return username, base64.b64encode(digest).decode()
 
 
 def make_pipeline(config: list[dict]) -> Pipeline:

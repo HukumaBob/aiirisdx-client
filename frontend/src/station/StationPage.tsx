@@ -50,6 +50,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   const [error, setError] = useState<string | null>(null)
   const [finished, setFinished] = useState<FinishedSession | null>(null)
   const [emrUrl, setEmrUrl] = useState(store.emrUrl)
+  const [token, setToken] = useState(store.token)
   const emrUrlRef = useRef(emrUrl)
   emrUrlRef.current = emrUrl
   const [outcome, setOutcome] = useState<ContainerOutcome | null>(null)
@@ -174,7 +175,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
     if (!win || win.closed) setWin(openSecondaryWindow())
     try {
       await flow.start({
-        stand, doctor, deviceId, mode, profile, filePath, realtime,
+        stand, doctor, deviceId, mode, profile, filePath, realtime, token,
         crop: cropOn ? crop : null,
       })
       setStatus(flow.getStatus())
@@ -265,6 +266,9 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
           )}
           <label>URL EMR (пусто — без отправки)
             <input value={emrUrl} placeholder="https://emr.example/api/results" onChange={(e) => { setEmrUrl(e.target.value); store.setEmrUrl(e.target.value) }} />
+          </label>
+          <label>Токен стойки (если сервер требует)
+            <input type="password" autoComplete="off" value={token} disabled={active} onChange={(e) => { setToken(e.target.value); store.setToken(e.target.value) }} />
           </label>
           <fieldset disabled={!doctor}>
             <legend>Профиль врача</legend>

@@ -73,10 +73,12 @@ export interface StationData {
   profiles: Record<string, DoctorProfile>
   /** EMR endpoint for the result container; empty = no delivery (download only) */
   emrUrl: string
+  /** stand token for a server with AIIRIS_REQUIRE_TOKEN; empty = none */
+  token: string
 }
 
 export function emptyData(): StationData {
-  return { version: STORAGE_VERSION, stand: '', doctors: [], lastDoctor: '', profiles: {}, emrUrl: '' }
+  return { version: STORAGE_VERSION, stand: '', doctors: [], lastDoctor: '', profiles: {}, emrUrl: '', token: '' }
 }
 
 export function cleanDoctorName(name: string): string {
@@ -96,6 +98,7 @@ export function migrate(raw: string | null): StationData {
   if (!isObj(j)) return d
   if (typeof j.stand === 'string') d.stand = j.stand.trim().slice(0, 32)
   if (typeof j.emrUrl === 'string') d.emrUrl = j.emrUrl.trim().slice(0, 512)
+  if (typeof j.token === 'string') d.token = j.token.trim().slice(0, 256)
   // v0 stored doctors as objects {name, ...profile}; v1 as names + a profiles map
   const profiles = isObj(j.profiles) ? j.profiles : {}
   if (Array.isArray(j.doctors)) {
@@ -136,6 +139,14 @@ export class StationStore {
   }
   setEmrUrl(url: string) {
     this.data.emrUrl = url.trim().slice(0, 512)
+    this.save()
+  }
+
+  get token() {
+    return this.data.token
+  }
+  setToken(token: string) {
+    this.data.token = token.trim().slice(0, 256)
     this.save()
   }
 

@@ -50,6 +50,8 @@ export interface StartParams {
   width?: number
   height?: number
   fps?: number
+  /** stand token (X-Stand-Token / ?token=) when the server requires one; overrides deps.token */
+  token?: string
 }
 
 export function canStart(p: Pick<StartParams, 'stand' | 'doctor' | 'mode' | 'filePath'>): { ok: boolean; reasons: ('stand' | 'doctor' | 'file')[] } {
@@ -116,6 +118,12 @@ export interface FlowDeps {
   wsBase: string
   token?: string
   fetchTimeoutMs?: number
+  /**
+   * WebRTC configuration (ICE servers: STUN/TURN) for the send connection. Default: GET
+   * `${base}/client-config` (server-issued, TURN credentials are time-limited); any failure
+   * -> undefined (browser defaults, host candidates only -- fine inside the hospital LAN).
+   */
+  loadRtcConfig?: () => Promise<RTCConfiguration | undefined>
 }
 
 export function defaultDeps(over: Partial<FlowDeps> = {}): FlowDeps {
@@ -195,10 +203,26 @@ export class SessionFlow {
     this.emit()
   }
 
+  private token(): string | undefined {
+    return this.params?.token?.trim() || this.deps.token || undefined
+  }
+
+  private async rtcConfig(): Promise<RTCConfiguration | undefined> {
+    if (this.deps.loadRtcConfig) return this.deps.loadRtcConfig().catch(() => undefined)
+    try {
+      const r = await this.http('/client-config', { method: 'GET', timeoutMs: 5000 })
+      const j = (await r.json()) as { ice_servers?: RTCIceServer[] }
+      return Array.isArray(j?.ice_servers) && j.ice_servers.length ? { iceServers: j.ice_servers } : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   private async http(path: string, init: { method: string; body?: unknown; timeoutMs?: number } ): Promise<Response> {
     const headers: Record<string, string> = {}
     if (init.body !== undefined) headers['Content-Type'] = 'application/json'
-    if (this.deps.token) headers['X-Stand-Token'] = this.deps.token
+    const token = this.token()
+    if (token) headers['X-Stand-Token'] = token
     const ac = typeof AbortController !== 'undefined' ? new AbortController() : null
     const t = ac ? setTimeout(() => ac.abort(), init.timeoutMs ?? this.deps.fetchTimeoutMs ?? 10000) : null
     try {
@@ -316,7 +340,7 @@ export class SessionFlow {
     }
     this.rc = new ResultsClient({
       url: `${this.deps.wsBase}/sessions/${this.sessionId}/results`,
-      token: this.deps.token,
+      token: this.token(),
       buffer: sink,
       WebSocket: this.deps.WebSocket,
       onState: (s) => {
@@ -332,13 +356,15 @@ export class SessionFlow {
     this.connection = 'connecting'
     this.emit()
     try {
+      const configuration = await this.rtcConfig()
+      if (gen !== this.connGen) return
       const c = await this.deps.connectSendStream(
         cap.sendStream,
         async (offer) => {
           const r = await this.http(`/sessions/${this.sessionId}/offer`, { method: 'POST', body: { sdp: offer.sdp, type: offer.type } })
           return (await r.json()) as RTCSessionDescriptionInit
         },
-        { onConnectionLost: (s) => gen === this.connGen && this.lost(`connection ${s}`) },
+        { configuration, onConnectionLost: (s) => gen === this.connGen && this.lost(`connection ${s}`) },
       )
       if (gen !== this.connGen) return c.close()
       this.conn = c

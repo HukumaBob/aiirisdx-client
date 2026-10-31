@@ -102,7 +102,7 @@ class Core:
         self.models = models
         self.sessions: dict[str, Session] = {}  # by session_id
         self.by_key: dict[str, Session] = {}  # by uuid
-        self.ingest = WebRtcIngest(self.on_frame, ice_servers=settings.ice_servers,
+        self.ingest = WebRtcIngest(self.on_frame, ice_servers=lambda: settings.ice_servers_now("server"),
                                    video_codecs=settings.video_codecs,
                                    max_side=settings.max_side, on_closed=self._on_ingest_closed)
         self._router: asyncio.Task | None = None
@@ -320,6 +320,16 @@ def health(request: Request):
     core = core_of(request)
     return {"status": "ok", "workers": core.settings.workers, "models": core.models,
             "sessions_open": sum(1 for s in core.sessions.values() if not s.closed)}
+
+
+@router.get("/client-config")
+def client_config(request: Request):
+    """What the stand page needs before connecting: ICE servers (STUN/TURN with fresh
+    time-limited TURN credentials) and whether a stand token is required. No auth: the TURN
+    credential is time-limited, and the token itself is never revealed."""
+    settings = core_of(request).settings
+    return {"ice_servers": settings.ice_servers_now("stand"),
+            "require_token": settings.require_token}
 
 
 @router.get("/sessions/{session_id}")

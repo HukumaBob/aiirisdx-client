@@ -248,3 +248,29 @@ def test_session_status_tracks_file_progress(client_factory, tmp_path):
     assert c.post(f"/sessions/{sid}/stop", headers=h).json()["frames"] == 15
     assert c.get(f"/sessions/{sid}", headers=h).json()["closed"] is True
     assert c.get("/sessions/nope_20260101T000000_" + "0" * 32).status_code == 404
+
+
+def test_client_config_turn_credentials(client_factory):
+    import base64
+    import hashlib
+    import hmac
+
+    from app.api.config import turn_credentials
+
+    c = client_factory(ice_servers=[{"urls": "stun:stun.example:3478"}],
+                       turn_urls=["turn:turn.example:3478"], turn_secret="s3", turn_ttl=600,
+                       require_token=True)
+    j = c.get("/client-config").json()
+    assert j["require_token"] is True
+    assert j["ice_servers"][0] == {"urls": "stun:stun.example:3478"}
+    turn = j["ice_servers"][1]
+    assert turn["urls"] == ["turn:turn.example:3478"]
+    expiry, user = turn["username"].split(":")
+    assert user == "stand" and int(expiry) > 0
+    want = base64.b64encode(hmac.new(b"s3", turn["username"].encode(), hashlib.sha1).digest()).decode()
+    assert turn["credential"] == want
+    assert turn_credentials("s3", 600, "u", now=1000.0)[0] == "1600:u"
+
+
+def test_client_config_without_turn(client_factory):
+    assert client_factory().get("/client-config").json() == {"ice_servers": [], "require_token": False}

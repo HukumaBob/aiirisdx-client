@@ -141,6 +141,11 @@ describe('test_profiles_survive_unavailable_storage', () => {
     expect(s.doctors).toEqual(['A'])
     expect(s.persisted).toBe(false)
   })
+  it('keeps the stand token across reloads', () => {
+    const st = memStorage()
+    new StationStore(st).setToken('  t0k ')
+    expect(new StationStore(st).token).toBe('t0k')
+  })
   it('uses the real key', () => {
     const st = memStorage()
     new StationStore(st).setStand('x')
@@ -202,7 +207,8 @@ function setup(opts: { fetchImpl?: (url: string, init?: RequestInit) => Promise<
     }
     close() {}
   }
-  const deps = { fetch: fetchImpl, startCapture, connectSendStream, createBuffer, resizeBitmap, WebSocket: FakeWS, base: '/api', wsBase: 'ws://h/api' } as unknown as FlowDeps
+  // loadRtcConfig stubbed so the REST call sequence below stays create/offer/stop/log
+  const deps = { fetch: fetchImpl, startCapture, connectSendStream, createBuffer, resizeBitmap, WebSocket: FakeWS, base: '/api', wsBase: 'ws://h/api', loadRtcConfig: async () => undefined } as unknown as FlowDeps
   return { deps, calls, fetchImpl, handle, recorder, startCapture, connectSendStream, connections, buffer, createBuffer, resizeBitmap, sockets, captureOpts: () => captureOpts, lost: (s: string) => lost?.(s) }
 }
 
@@ -251,6 +257,48 @@ describe('session flow', () => {
     const flow = new SessionFlow({ ...t.deps, token: 'tok' })
     await flow.start(params())
     expect(t.calls[0].headers).toMatchObject({ 'X-Stand-Token': 'tok' })
+  })
+
+  it('a token in the start params wins over deps.token (header and results ws)', async () => {
+    const t = setup()
+    const flow = new SessionFlow({ ...t.deps, token: 'old' })
+    await flow.start(params({ token: ' stand-tok ' }))
+    expect(t.calls[0].headers).toMatchObject({ 'X-Stand-Token': 'stand-tok' })
+    expect(t.calls.find((c) => c.url.endsWith('/offer'))?.headers).toMatchObject({ 'X-Stand-Token': 'stand-tok' })
+  })
+
+  it('default ICE config: GET /client-config -> RTCConfiguration for the send connection', async () => {
+    const ice = [{ urls: ['turn:t.example:3478'], username: '1:stand', credential: 'c' }]
+    const t = setup({
+      fetchImpl: async (url) => {
+        const json = (b: unknown) => ({ ok: true, status: 200, json: async () => b }) as unknown as Response
+        if (url.endsWith('/client-config')) return json({ ice_servers: ice, require_token: false })
+        if (url.endsWith('/sessions')) return json({ session_id: 'stand-1_20260101T000000_abc' })
+        return json({ sdp: 'ANSWER', type: 'answer' })
+      },
+    })
+    const { loadRtcConfig: _drop, ...deps } = t.deps
+    void _drop
+    await new SessionFlow(deps as FlowDeps).start(params())
+    expect(t.calls.map((c) => c.url)).toContain('/api/client-config')
+    expect(t.connectSendStream.mock.calls[0][2]).toMatchObject({ configuration: { iceServers: ice } })
+  })
+
+  it('client-config unavailable -> connects with browser defaults', async () => {
+    const t = setup({
+      fetchImpl: async (url) => {
+        const json = (b: unknown, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => b }) as unknown as Response
+        if (url.endsWith('/client-config')) return json({}, false)
+        if (url.endsWith('/sessions')) return json({ session_id: 'stand-1_20260101T000000_abc' })
+        return json({ sdp: 'ANSWER', type: 'answer' })
+      },
+    })
+    const { loadRtcConfig: _drop, ...deps } = t.deps
+    void _drop
+    const flow = new SessionFlow(deps as FlowDeps)
+    await flow.start(params())
+    expect(t.connectSendStream.mock.calls[0][2]).toMatchObject({ configuration: undefined })
+    expect(flow.getStatus().connection).toBe('connected')
   })
 
   it('file mode: createSession -> POST /file {path, realtime}, no capture', async () => {
