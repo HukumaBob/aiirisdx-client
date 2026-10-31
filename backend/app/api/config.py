@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     turn_ttl: int = Field(default=86400, ge=60)  # seconds a credential is valid
     video_codecs: list[str] | None = None
     max_side: int = 960
+    warmup_frames: int = Field(default=3, ge=0)  # dummy frames per worker before "ready"
 
     ws_queue_size: int = Field(default=64, ge=1)  # per-subscriber results buffer
     drain_timeout: float = 3.0  # seconds /stop waits for in-flight results

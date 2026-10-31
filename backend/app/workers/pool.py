@@ -142,6 +142,11 @@ class InferencePool:
     async def __aexit__(self, *exc) -> None:
         await self.close()
 
+    @property
+    def ready(self) -> bool:
+        """True when every worker has built its pipeline and is serving."""
+        return bool(self._workers) and all(w.ready for w in self._workers)
+
     async def wait_ready(self, timeout: float = 60.0) -> None:
         """Wait until every worker has built its pipeline (e.g. loaded model weights)."""
         self._ensure_started()

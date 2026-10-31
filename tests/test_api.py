@@ -223,7 +223,14 @@ def test_health_endpoint(client_factory):
     c = client_factory()
     r = c.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "workers": 1, "models": {"fast": "t1"}, "sessions_open": 0}
+    j = r.json()
+    assert {k: j[k] for k in ("status", "workers", "models", "sessions_open")} == {
+        "status": "ok", "workers": 1, "models": {"fast": "t1"}, "sessions_open": 0}
+    import time
+    deadline = time.monotonic() + 30
+    while not c.get("/health").json()["ready"]:  # workers built + warmed
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
 
 
 def test_session_status_tracks_file_progress(client_factory, tmp_path):
@@ -274,3 +281,29 @@ def test_client_config_turn_credentials(client_factory):
 
 def test_client_config_without_turn(client_factory):
     assert client_factory().get("/client-config").json() == {"ice_servers": [], "require_token": False}
+
+
+class CountStage:
+    name = "count"
+    version = "c1"
+    kind = "detector"
+
+    def __init__(self):
+        self.calls = []
+
+    def process(self, frame, ref, ctx):
+        self.calls.append((ref.session_id, frame.shape))
+        return StageResult(frame_id=ref.frame_id, stage=self.name)
+
+
+def count_pipeline() -> Pipeline:
+    return Pipeline([CountStage()])
+
+
+def test_warmed_pipeline_runs_dummy_frames():
+    from app.api.main import warmed_pipeline
+
+    p = warmed_pipeline(count_pipeline, 3, (540, 960))
+    calls = p.stages[0].calls if hasattr(p, "stages") else None
+    assert calls == [("warmup", (540, 960, 3))] * 3
+    assert warmed_pipeline(count_pipeline, 0, (540, 960)).model_versions() == {"count": "c1"}
