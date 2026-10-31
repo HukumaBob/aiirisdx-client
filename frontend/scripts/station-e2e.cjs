@@ -9,6 +9,13 @@
  * sender's outbound-rtp stats (framesEncoded / framesSent, via a wrapped RTCPeerConnection),
  * the server's ingest counters (GET /api/sessions/{id}: received / delivered / skipped) and
  * the log (frame lines, dropped), so sent = encoder-skipped + received + ... can be checked.
+ * --cadence: records every secondary-screen release (AlignmentBuffer.onReady via the dev-only
+ * window.__aiirisFlow hook) and prints inter-release gaps (max / p95 / p99), lateness against
+ * each frame's own delay deadline, and the buffer stats (released / withResult / gapReleased
+ * / timedOut). Needs the vite DEV server.
+ * --drop-results F: discard a deterministic fraction F (0..1) of result messages in the page
+ * (results WebSocket wrapped) -- the same, for the secondary screen, as F of the frames never
+ * reaching the server (encoder skip / unreadable marker); used to measure the C1 gap release.
  */
 const { chromium } = require('playwright')
 const a = process.argv.slice(2)
@@ -26,6 +33,28 @@ for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) o[a[i].slice(2)] =
     page.on('console', (m) => process.stderr.write(`[page] ${m.text()}\n`))
     page.on('pageerror', (e) => process.stderr.write(`[pageerror] ${e}\n`))
     let sessionId = null
+    if (o['drop-results']) {
+      await page.addInitScript((frac) => {
+        const WS = window.WebSocket
+        window.__droppedResults = 0
+        class DropWS extends WS {
+          set onmessage(fn) {
+            super.onmessage = (ev) => {
+              let id = null
+              try { id = JSON.parse(ev.data).frame_id } catch {}
+              // deterministic pseudo-random subset of frame ids
+              if (typeof id === 'number' && ((id * 2654435761) % 4294967296) / 4294967296 < frac) {
+                window.__droppedResults++
+                return
+              }
+              fn(ev)
+            }
+          }
+          get onmessage() { return super.onmessage }
+        }
+        window.WebSocket = DropWS
+      }, Number(o['drop-results']))
+    }
     if (o.accounting) {
       await page.addInitScript(() => {
         const PC = window.RTCPeerConnection
@@ -59,8 +88,16 @@ for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) o[a[i].slice(2)] =
       await page.mouse.up()
       out.cropInfo = await page.getByTestId('crop-info').innerText()
     }
+    out.negotiated = await page.getByTestId('negotiated').innerText().catch(() => null)
     await page.getByRole('button', { name: 'Старт' }).click()
     await page.waitForFunction(() => document.querySelector('[data-testid=state]')?.textContent === 'идёт сеанс', null, { timeout: 20000 })
+    if (o.cadence) {
+      await page.waitForFunction(() => window.__aiirisFlow?.buffer, null, { timeout: 10000 })
+      await page.evaluate(() => {
+        window.__rel = []
+        window.__aiirisFlow.buffer.onReady((f, r) => window.__rel.push([performance.now(), f.tMs, r ? 1 : 0, f.frameId]))
+      })
+    }
     await page.waitForTimeout(Number(o.seconds || 8) * 1000)
     const t0 = await page.evaluate(() => { const v = document.querySelector('video'); return { paused: v.paused, t: v.currentTime } })
     await page.waitForTimeout(1500)
@@ -81,6 +118,24 @@ for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) o[a[i].slice(2)] =
         return rows
       })
       out.statusAtStop = await page.getByTestId('statusline').innerText()
+    }
+    if (o.cadence) {
+      out.cadence = await page.evaluate(() => {
+        const rel = window.__rel.slice(10) // skip the start-up transient
+        const delay = window.__aiirisFlow.params?.profile?.bufferDelayMs ?? null
+        const gaps = rel.slice(1).map((x, i) => x[0] - rel[i][0]).sort((a, b) => a - b)
+        const late = rel.map((x) => x[0] - x[1] - (delay ?? 0)).sort((a, b) => a - b)
+        const q = (a, p) => (a.length ? Math.round(a[Math.min(a.length - 1, Math.floor(p * a.length))] * 10) / 10 : null)
+        const ids = rel.map((x) => x[3])
+        return {
+          delayMs: delay, releases: rel.length, withBoxes: rel.filter((x) => x[2]).length, withoutBoxes: rel.filter((x) => !x[2]).length,
+          inOrder: ids.every((v, i) => i === 0 || v > ids[i - 1]),
+          gapMs: { p50: q(gaps, 0.5), p95: q(gaps, 0.95), p99: q(gaps, 0.99), max: q(gaps, 1) },
+          latenessMs: { p50: q(late, 0.5), p95: q(late, 0.95), max: q(late, 1) },
+          stats: { ...window.__aiirisFlow.buffer.stats },
+          resultsDiscardedInPage: window.__droppedResults ?? 0,
+        }
+      })
     }
     await page.getByRole('button', { name: 'Стоп' }).click()
     await page.getByTestId('finished').waitFor({ timeout: 60000 })

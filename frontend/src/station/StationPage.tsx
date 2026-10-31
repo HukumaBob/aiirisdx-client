@@ -75,6 +75,10 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       }),
     [], // eslint-disable-line react-hooks/exhaustive-deps
   )
+  // dev server only (scripts/station-e2e.cjs --cadence reads the buffer's release timing)
+  useEffect(() => {
+    if (import.meta.env.DEV) (window as unknown as { __aiirisFlow?: SessionFlow }).__aiirisFlow = flow
+  }, [flow])
   // the live capture's source (set as soon as the capture exists, also when the server is lost)
   const captureStream = flow.capture?.sourceStream ?? null
   const active = ['starting', 'running', 'server-lost', 'stopping'].includes(status.state)
