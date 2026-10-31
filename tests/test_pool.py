@@ -187,3 +187,78 @@ async def test_submit_after_close_returns_false():
     # results() terminates after close
     rest = [x async for x in pool.results()]
     assert rest == []
+
+
+# ---------------------------------------------------------------- I5: restart backoff / budget
+def failing_factory():
+    raise RuntimeError("weights not found: /nope.pt")
+
+
+def flaky_factory(counter_dir, fails):
+    """Fails the first ``fails`` builds (counted with files, one worker), then works."""
+    from pathlib import Path
+
+    d = Path(counter_dir)
+    n = len(list(d.iterdir()))
+    (d / f"attempt{n}").touch()
+    if n < fails:
+        raise RuntimeError(f"flaky build {n}")
+    return make_pipeline()
+
+
+def test_restart_delay_schedule_is_deterministic_exponential_capped():
+    from app.workers.pool import restart_delay
+
+    assert [restart_delay(n, 0.5, 30.0) for n in range(0, 10)] == [
+        0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
+
+
+async def _until(cond, timeout=30.0):
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, "condition not reached"
+        await asyncio.sleep(0.02)
+
+
+async def test_failing_factory_gives_up_after_budget_and_drops_frames_promptly(caplog):
+    caplog.set_level("WARNING", logger="app.workers.pool")
+    pool = InferencePool(failing_factory, workers=2, queue_size=4,
+                         restart_backoff=0.01, restart_max_backoff=0.05, max_start_failures=3)
+    try:
+        # frames submitted while the workers are still (re)starting wait in the queue
+        assert pool.submit(frame(1), ref(1))
+        assert pool.submit(frame(2), ref(2))
+        await _until(lambda: pool.failed_workers == [0, 1])
+        assert not pool.healthy and not pool.ready
+        assert "all 2 inference workers failed" in pool.status_reason
+        with pytest.raises(RuntimeError):
+            await pool.wait_ready(timeout=1)
+        # no more spawns: exactly 3 attempts per worker
+        spawns = [r for r in caplog.records if "failed to start" in r.getMessage()]
+        assert sum("giving up" in r.getMessage() for r in spawns) == 2
+        assert sum("restarting in" in r.getMessage() for r in spawns) == 2 * 2
+        t0 = time.monotonic()
+        for i in range(3, 6):
+            assert pool.submit(frame(i), ref(i))
+        recs = await collect(pool, 5, timeout=2.0)
+        assert time.monotonic() - t0 < 1.0
+        assert sorted(r.frame_id for _, r in recs) == [1, 2, 3, 4, 5]  # exactly one each
+        assert all(r.dropped for _, r in recs)
+    finally:
+        await pool.close()
+
+
+async def test_worker_that_fails_twice_then_starts_is_kept(tmp_path):
+    pool = InferencePool(functools.partial(flaky_factory, str(tmp_path), 2), workers=1,
+                         queue_size=4, restart_backoff=0.01, restart_max_backoff=0.05,
+                         max_start_failures=3)
+    await pool.__aenter__()
+    try:
+        await _until(lambda: pool.ready)
+        assert pool.failed_workers == [] and pool.healthy and pool.status_reason is None
+        assert len(list(tmp_path.iterdir())) == 3
+        pool.submit(frame(7), ref(7))
+        (item,) = await collect(pool, 1)
+        assert_own_detections(item[1], 7)
+    finally:
+        await pool.close()

@@ -23,6 +23,15 @@ Design
   pool does not reorder; consumers key by ``(session_id, frame_id)`` (RF3).
 * A pipeline exception or a worker crash never stops the pool: the frame is emitted as
   dropped and a dead worker process is restarted.
+* Restart policy (I5): a worker that dies BEFORE reporting ready (e.g. the pipeline factory
+  raises: bad weights path, CUDA unavailable) is restarted after a deterministic exponential
+  backoff ``restart_delay(n) = min(max_backoff, backoff * 2**(n-1))`` (0.5 s, 1, 2, 4 ... 30 s)
+  where n counts its consecutive failures-before-ready; after ``max_start_failures`` (5) it
+  is marked permanently FAILED (one ERROR log line, no more spawns). A worker that dies after
+  having been ready (crash on a frame) is restarted at once and its count starts over.
+  ``failed_workers`` / ``healthy`` / ``status_reason`` expose the state (/health). When every
+  worker is failed, queued and newly submitted frames are emitted as dropped immediately, so
+  the exactly-one-record rule still holds.
 
 Threading model: all pool state is owned by the asyncio event loop thread (``submit`` must
 be called from it). One background reader thread waits on the worker pipes / process
@@ -79,6 +88,13 @@ def _worker_main(factory: Callable[[], Pipeline], task_r: Connection, res_w: Con
             res_w.send((seq, None, repr(e)))
 
 
+def restart_delay(failures: int, backoff: float, max_backoff: float) -> float:
+    """Delay before restart number ``failures`` (1-based) of a never-ready worker."""
+    if failures <= 0:
+        return 0.0
+    return min(max_backoff, backoff * 2 ** (failures - 1))
+
+
 def dropped_record(ref: FrameRef) -> FrameRecord:
     return FrameRecord(frame_id=ref.frame_id, pts=ref.pts, detections=[], classification={},
                        anatomy=None, dropped=True)
@@ -115,9 +131,19 @@ class _Worker:
 
 
 class InferencePool:
-    def __init__(self, pipeline_factory: Callable[[], Pipeline], workers: int, queue_size: int):
+    def __init__(self, pipeline_factory: Callable[[], Pipeline], workers: int, queue_size: int,
+                 *, restart_backoff: float = 0.5, restart_max_backoff: float = 30.0,
+                 max_start_failures: int = 5):
         if workers < 1 or queue_size < 1:
             raise ValueError("workers and queue_size must be >= 1")
+        if max_start_failures < 1:
+            raise ValueError("max_start_failures must be >= 1")
+        self._backoff = restart_backoff
+        self._max_backoff = restart_max_backoff
+        self._max_start_failures = max_start_failures
+        self._start_failures = [0] * workers  # consecutive deaths before ready, per slot
+        self._failed: set[int] = set()  # permanently failed slots
+        self._restart_timers: dict[int, asyncio.TimerHandle] = {}
         self._factory = pipeline_factory
         self._queue_size = queue_size
         self._ctx = mp.get_context("spawn")
@@ -147,11 +173,41 @@ class InferencePool:
         """True when every worker has built its pipeline and is serving."""
         return bool(self._workers) and all(w.ready for w in self._workers)
 
+    @property
+    def failed_workers(self) -> list[int]:
+        """Worker slots that exhausted their restart budget (never restarted again)."""
+        return sorted(self._failed)
+
+    @property
+    def healthy(self) -> bool:
+        """At least one worker is up and serving."""
+        return any(w.ready and not w.dead for w in self._workers)
+
+    @property
+    def status_reason(self) -> str | None:
+        """Why the pool is not (fully) ready, None when it is."""
+        if self.ready:
+            return None
+        n = len(self._workers)
+        if len(self._failed) == n:
+            return (f"all {n} inference workers failed to start "
+                    f"({self._max_start_failures} attempts each); see the server log")
+        parts = []
+        if self._failed:
+            parts.append(f"workers {self.failed_workers} failed to start")
+        starting = sum(1 for i, w in enumerate(self._workers) if i not in self._failed and not w.ready)
+        if starting:
+            parts.append(f"{starting} worker(s) starting / restarting")
+        return "; ".join(parts) or None
+
     async def wait_ready(self, timeout: float = 60.0) -> None:
-        """Wait until every worker has built its pipeline (e.g. loaded model weights)."""
+        """Wait until every worker has built its pipeline (e.g. loaded model weights).
+        Raises RuntimeError at once when a worker is permanently failed."""
         self._ensure_started()
         deadline = time.monotonic() + timeout
         while not all(w.ready for w in self._workers):
+            if self._failed:
+                raise RuntimeError(self.status_reason or "inference workers failed")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("inference workers not ready")
@@ -168,6 +224,9 @@ class InferencePool:
         self._ensure_started()
         self._seq += 1
         item = _Item(self._seq, frame, ref)
+        if self._all_failed():
+            self._emit_dropped(item)  # nobody can ever run it: one (dropped) record, now
+            return True
         if len(self._pending) >= self._queue_size:
             self._evict_for(ref.session_id)
         self._pending.append(item)
@@ -196,6 +255,9 @@ class InferencePool:
             return
         self._ensure_started()
         self._closed = True
+        for h in self._restart_timers.values():
+            h.cancel()
+        self._restart_timers.clear()
         while self._pending:
             self._emit_dropped(self._pending.popleft())
         for w in self._workers:
@@ -244,7 +306,14 @@ class InferencePool:
         self._pending.remove(victim)
         self._emit_dropped(victim)
 
+    def _all_failed(self) -> bool:
+        return len(self._failed) == len(self._workers)
+
     def _dispatch(self) -> None:
+        if self._all_failed():
+            while self._pending:
+                self._emit_dropped(self._pending.popleft())
+            return
         for w in self._workers:
             if not self._pending:
                 return
@@ -270,6 +339,10 @@ class InferencePool:
             return  # late message from a replaced worker
         if msg == _READY:
             w.ready = True
+            if self._start_failures[idx]:
+                log.info("inference worker %d ready after %d failed start(s)", idx,
+                         self._start_failures[idx])
+            self._start_failures[idx] = 0
             self._ready_ev.set()
             self._dispatch()
             return
@@ -291,16 +364,41 @@ class InferencePool:
         if w.gen != gen or w.dead:
             return
         w.dead = True
+        was_ready = w.ready
+        w.ready = False
         if w.busy is not None:
             log.warning("worker %d died on frame %s", idx, w.busy.ref.frame_id)
             if self._in_flight.pop(w.busy.seq, None) is not None:
                 self._emit_dropped(w.busy)
             w.busy = None
-        if self._closed:
-            return
-        log.warning("restarting inference worker %d (exitcode %s)", idx, w.proc.exitcode)
         w.proc.join(timeout=1.0)
         w.close_handles()
+        if self._closed:
+            return
+        if was_ready:
+            self._start_failures[idx] = 0
+            log.warning("restarting inference worker %d (exitcode %s)", idx, w.proc.exitcode)
+            self._respawn(idx, gen)
+            return
+        self._start_failures[idx] += 1
+        n = self._start_failures[idx]
+        if n >= self._max_start_failures:
+            self._failed.add(idx)
+            log.error("inference worker %d failed to start %d times in a row (last exitcode %s): "
+                      "giving up on it -- check the pipeline config / model weights / GPU", idx, n,
+                      w.proc.exitcode)
+            self._ready_ev.set()  # wake wait_ready so it can fail fast
+            self._dispatch()  # all failed -> queued frames become dropped records now
+            return
+        delay = restart_delay(n, self._backoff, self._max_backoff)
+        log.warning("inference worker %d failed to start (exitcode %s, attempt %d/%d); "
+                    "restarting in %.2f s", idx, w.proc.exitcode, n, self._max_start_failures, delay)
+        self._restart_timers[idx] = self._loop.call_later(delay, self._respawn, idx, gen)
+
+    def _respawn(self, idx: int, gen: int) -> None:
+        self._restart_timers.pop(idx, None)
+        if self._closed or self._workers[idx].gen != gen:
+            return
         self._workers[idx] = _Worker(self._ctx, self._factory, idx, gen + 1)
 
     # ------------------------------------------------------------------ reader thread

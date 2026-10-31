@@ -46,7 +46,10 @@ def create_app(settings: Settings, pipeline_factory: Callable[[], Pipeline]) -> 
         side = settings.max_side
         worker_factory = functools.partial(warmed_pipeline, pipeline_factory,
                                            settings.warmup_frames, (side * 9 // 16, side))
-        pool = InferencePool(worker_factory, settings.workers, settings.queue_size)
+        pool = InferencePool(worker_factory, settings.workers, settings.queue_size,
+                             restart_backoff=settings.worker_restart_backoff,
+                             restart_max_backoff=settings.worker_restart_max_backoff,
+                             max_start_failures=settings.worker_max_start_failures)
         core = sessions.Core(settings, pool, models)
         app.state.core = core
         await pool.__aenter__()

@@ -316,10 +316,14 @@ def _file_state(s: Session) -> str:
 @router.get("/health")
 def health(request: Request):
     """Liveness/readiness: ``status`` "ok" = the app is up; ``ready`` = every inference worker
-    has built and warmed its pipeline (frames sent before that may be dropped). No auth (it reveals only model versions and counters, no session data)."""
+    has built and warmed its pipeline (frames sent before that may be dropped); ``healthy`` = at
+    least one worker serves; ``failed_workers`` = slots that exhausted their restart budget;
+    ``reason`` = why not ready (null when ready). No auth (it reveals only model versions and counters, no session data)."""
     core = core_of(request)
-    return {"status": "ok", "ready": core.pool.ready, "workers": core.settings.workers,
-            "models": core.models,
+    pool = core.pool
+    return {"status": "ok", "ready": pool.ready, "healthy": pool.healthy,
+            "failed_workers": pool.failed_workers, "reason": pool.status_reason,
+            "workers": core.settings.workers, "models": core.models,
             "sessions_open": sum(1 for s in core.sessions.values() if not s.closed)}
 
 

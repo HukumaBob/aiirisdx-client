@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     video_codecs: list[str] | None = None
     max_side: int = 960
     warmup_frames: int = Field(default=3, ge=0)  # dummy frames per worker before "ready"
+    # a worker that dies before ready is restarted after 0.5, 1, 2 ... (cap 30) s and given up
+    # after this many consecutive failed starts (pool.py, restart policy)
+    worker_restart_backoff: float = Field(default=0.5, gt=0)
+    worker_restart_max_backoff: float = Field(default=30.0, gt=0)
+    worker_max_start_failures: int = Field(default=5, ge=1)
 
     ws_queue_size: int = Field(default=64, ge=1)  # per-subscriber results buffer
     drain_timeout: float = 3.0  # seconds /stop waits for in-flight results

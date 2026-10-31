@@ -375,3 +375,54 @@ def test_warmed_pipeline_runs_dummy_frames():
     calls = p.stages[0].calls if hasattr(p, "stages") else None
     assert calls == [("warmup", (540, 960, 3))] * 3
     assert warmed_pipeline(count_pipeline, 0, (540, 960)).model_versions() == {"count": "c1"}
+
+
+# ---------------------------------------------------------------- I5: failing workers
+def worker_only_failing_pipeline() -> Pipeline:
+    """Builds in the parent (model-versions probe) but raises in every worker process,
+    like weights that are readable by the API process but break CUDA init in workers."""
+    import multiprocessing
+
+    if multiprocessing.parent_process() is not None:
+        raise RuntimeError("CUDA init failed in worker")
+    return fast_pipeline()
+
+
+def test_health_reports_failed_workers_and_frames_are_dropped(tmp_path):
+    import time
+
+    s = make_settings(tmp_path, workers=2, worker_restart_backoff=0.01,
+                      worker_restart_max_backoff=0.05, worker_max_start_failures=2)
+    with TestClient(build_app(s, pool_factory=worker_only_failing_pipeline)) as c:
+        deadline = time.monotonic() + 30
+        while c.get("/health").json()["failed_workers"] != [0, 1]:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        j = c.get("/health").json()
+        assert j["status"] == "ok" and j["ready"] is False and j["healthy"] is False
+        assert "failed to start" in j["reason"]
+        # frames still yield exactly one (dropped) record each, promptly
+        sid = _run_file(c, tmp_path, 8)
+        assert c.post(f"/sessions/{sid}/file", json={"path": "v.mp4", "realtime": False}).status_code == 200
+        deadline = time.monotonic() + 10
+        while True:
+            st = c.get(f"/sessions/{sid}").json()
+            if st["file"] == "done" and st["logged"] == st["submitted"] == 8:
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert c.post(f"/sessions/{sid}/stop").json()["frames"] == 8
+        _, recs, complete = read_log(Path(s.sessions_dir) / sid / "log.jsonl")
+        assert complete and [r.frame_id for r in recs] == list(range(8))
+        assert all(r.dropped for r in recs)
+
+
+def test_health_ready_has_no_reason(client_factory):
+    import time
+
+    c = client_factory()
+    deadline = time.monotonic() + 30
+    while not (j := c.get("/health").json())["ready"]:
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    assert j["healthy"] is True and j["failed_workers"] == [] and j["reason"] is None
