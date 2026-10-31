@@ -113,28 +113,49 @@ def _run_file(c, tmp_path, n=40):
     return sid
 
 
-def test_results_ws_frame_ids_monotonic_or_marked(client_factory, tmp_path):
-    c = client_factory(queue_size=2)  # tiny queue: some frames may be dropped=True
+class BodyStage:
+    """Detection signature of the frame's OWN pixels: class_name "b<k>" where the frame body
+    value is 40 + k*20 (test_ingest.body_value(frame_id) = 40 + (frame_id % 8) * 20)."""
+
+    name = "body"
+    version = "t1"
+    kind = "detector"
+
+    def process(self, frame, ref, ctx):
+        k = int(round((float(np.median(frame)) - 40) / 20))
+        d = Detection(bbox=(0.1, 0.1, 0.2, 0.2), class_name=f"b{k}", confidence=0.9)
+        return StageResult(frame_id=ref.frame_id, stage=self.name, detections=[d])
+
+
+def body_pipeline() -> Pipeline:
+    return Pipeline([BodyStage()])
+
+
+def test_results_ws_frame_ids_monotonic_or_marked(tmp_path):
     n = 40
-    sid = _run_file(c, tmp_path, n)
-    msgs = []
-    with c.websocket_connect(f"/sessions/{sid}/results") as ws:
-        r = c.post(f"/sessions/{sid}/file", json={"path": "v.mp4", "realtime": False})
-        assert r.status_code == 200, r.text
-        while len(msgs) < n:
-            msgs.append(ws.receive_json())
-    ids = [m["frame_id"] for m in msgs]
-    assert len(set(ids)) == len(ids), "duplicate frame ids"
-    assert set(ids) <= set(range(n)), "frame id that was never submitted"
-    assert ids == sorted(ids) or all(isinstance(m["dropped"], bool) for m in msgs)
-    for m in msgs:
-        assert set(m) >= {"frame_id", "pts", "dropped", "detections", "classification", "anatomy"}
-        if not m["dropped"]:
-            assert m["detections"][0]["class_name"] == "x"
-        else:
-            assert m["detections"] == []
-    stop = c.post(f"/sessions/{sid}/stop").json()
-    assert stop["frames"] == n
+    # tiny queue: some frames may be dropped=True
+    with TestClient(build_app(make_settings(tmp_path, queue_size=2), pool_factory=body_pipeline)) as c:
+        sid = _run_file(c, tmp_path, n)
+        msgs = []
+        with c.websocket_connect(f"/sessions/{sid}/results") as ws:
+            r = c.post(f"/sessions/{sid}/file", json={"path": "v.mp4", "realtime": False})
+            assert r.status_code == 200, r.text
+            while len(msgs) < n:
+                msgs.append(ws.receive_json())
+        ids = [m["frame_id"] for m in msgs]
+        assert len(set(ids)) == len(ids), "duplicate frame ids"
+        assert set(ids) == set(range(n)), "every submitted frame yields exactly one message"
+        for m in msgs:
+            assert set(m) >= {"frame_id", "pts", "dropped", "detections", "classification", "anatomy"}
+            assert isinstance(m["dropped"], bool)
+            if not m["dropped"]:
+                # the boxes were computed from THIS frame's pixels, never another frame's
+                assert [d["class_name"] for d in m["detections"]] == [f"b{m['frame_id'] % 8}"]
+            else:
+                assert m["detections"] == []
+        assert any(not m["dropped"] for m in msgs)
+        stop = c.post(f"/sessions/{sid}/stop").json()
+        assert stop["frames"] == n
 
 
 def test_stop_closes_log_complete(client_factory, tmp_path):
