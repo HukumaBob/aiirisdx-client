@@ -38,6 +38,7 @@ async def results(ws: WebSocket, session_id: str):
         await ws.close(code=4401, reason="bad stand token")
         return
     await ws.accept()
+    core.touch(s)
     sub = Subscriber(core.settings.ws_queue_size)
     s.subscribers.add(sub)
 

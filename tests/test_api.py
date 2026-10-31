@@ -550,3 +550,77 @@ def test_ws_for_stopped_session_closes_4404(client_factory):
         with pytest.raises(WebSocketDisconnect) as e:
             ws.receive_json()
     assert e.value.code == 4404
+
+
+# ---------------------------------------------------------------- idle sessions / _ID_RE
+class FakeClock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_idle_sessions_are_closed_incomplete_and_pruned(tmp_path):
+    s = make_settings(tmp_path, session_idle_timeout=1800)
+    with TestClient(build_app(s, pool_factory=fast_pipeline)) as c:
+        core = c.app.state.core
+        clock = FakeClock()
+        core.clock = clock
+        idle = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
+        busy = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
+        stopped = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
+        c.post(f"/sessions/{stopped}/stop")
+        clock.t += 1000
+        assert c.get(f"/sessions/{busy}").status_code == 200  # an API call is activity
+        clock.t += 799
+        assert c.portal.call(core.reap_idle) == []  # idle for 1799 s: not yet
+        clock.t += 1
+        assert sorted(c.portal.call(core.reap_idle)) == sorted([idle, stopped])
+        assert idle not in core.sessions and stopped not in core.sessions and busy in core.sessions
+        assert all(x.session_id != idle for x in core.by_key.values())
+        assert c.get(f"/sessions/{idle}").status_code == 404
+        # the log was closed (footer complete=false) and is still served from disk
+        _, recs, complete = read_log(Path(s.sessions_dir) / idle / "log.jsonl")
+        assert recs == [] and complete is False
+        assert c.get(f"/sessions/{idle}/log").status_code == 200
+        _, _, complete = read_log(Path(s.sessions_dir) / stopped / "log.jsonl")
+        assert complete is True  # an already stopped session keeps its complete log
+        clock.t += 1800
+        assert c.portal.call(core.reap_idle) == [busy]
+
+
+def test_frames_keep_a_session_alive_and_timeout_0_disables(tmp_path):
+    s = make_settings(tmp_path, session_idle_timeout=0)
+    with TestClient(build_app(s, pool_factory=fast_pipeline)) as c:
+        core = c.app.state.core
+        clock = FakeClock()
+        core.clock = clock
+        sid = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
+        clock.t += 10**6
+        assert c.portal.call(core.reap_idle) == [] and sid in core.sessions
+    s = make_settings(tmp_path, session_idle_timeout=60)
+    with TestClient(build_app(s, pool_factory=fast_pipeline)) as c:
+        core = c.app.state.core
+        clock = FakeClock()
+        core.clock = clock
+        sid = _run_file(c, tmp_path, 3)
+        clock.t += 59
+        from app.pipeline.stage import FrameRef
+        key = core.sessions[sid].key
+        c.portal.call(lambda: core.on_frame(np.zeros((8, 8, 3), np.uint8), FrameRef(key, 0, 0.0)))
+        clock.t += 59  # 118 s since creation, 59 s since the last frame
+        assert c.portal.call(core.reap_idle) == []
+
+
+def test_session_id_regex_is_a_full_match(tmp_path, client_factory):
+    from app.api.sessions import _ID_RE
+
+    good = "s1_20261030T100000_" + "a" * 32
+    assert _ID_RE.fullmatch(good)
+    assert not _ID_RE.fullmatch(good + "\n")
+    c = client_factory()
+    d = Path(c.app.state.settings.sessions_dir) / (good + "\n")
+    d.mkdir(parents=True)
+    (d / "log.jsonl").write_text("{}\n")
+    assert c.get(f"/sessions/{good}%0A/log").status_code == 404

@@ -67,6 +67,10 @@ class Settings(BaseSettings):
 
     ws_queue_size: int = Field(default=64, ge=1)  # per-subscriber results buffer
     drain_timeout: float = 3.0  # seconds /stop waits for in-flight results
+    # a session with no frames received and no API call for this long (s) is abandoned: its
+    # log is closed with complete=false, ingest released, and it is pruned from the registry
+    # (its log stays readable via GET /sessions/{id}/log from disk). 0 disables
+    session_idle_timeout: float = Field(default=1800.0, ge=0)
 
     @model_validator(mode="after")
     def _refuse_unsafe_secrets(self) -> "Settings":

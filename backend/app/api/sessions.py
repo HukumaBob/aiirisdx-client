@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import uuid as uuidlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -50,7 +51,7 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 STAND_RE = r"^[A-Za-z0-9-]{1,32}$"
-_ID_RE = re.compile(r"^([A-Za-z0-9-]{1,32})_(\d{8}T\d{6})_([0-9a-f]{32})$")
+_ID_RE = re.compile(r"([A-Za-z0-9-]{1,32})_(\d{8}T\d{6})_([0-9a-f]{32})")  # use fullmatch
 
 
 class Subscriber:
@@ -96,6 +97,7 @@ class Session:
     file_ingest: FileIngest | None = None
     file_error: str | None = None
     subscribers: set[Subscriber] = field(default_factory=set)
+    last_activity: float = 0.0  # Core.clock() of the last frame / API call (idle reaping)
 
 
 class Core:
@@ -109,13 +111,54 @@ class Core:
                                    video_codecs=settings.video_codecs,
                                    max_side=settings.max_side, on_closed=self._on_ingest_closed)
         self._router: asyncio.Task | None = None
+        self._reaper: asyncio.Task | None = None
+        self.clock = time.monotonic  # injectable (tests)
         self._log_exec = ThreadPoolExecutor(1, thread_name_prefix="log-writer")
 
     # ---------------------------------------------------------------- lifecycle
     def start(self) -> None:
         self._router = asyncio.create_task(self._route(), name="results-router")
+        if self.settings.session_idle_timeout > 0:
+            self._reaper = asyncio.create_task(self._reap_loop(), name="idle-session-reaper")
+
+    async def _reap_loop(self) -> None:
+        interval = min(60.0, max(1.0, self.settings.session_idle_timeout / 4))
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.reap_idle()
+            except Exception:
+                log.exception("idle session reaping failed")
+
+    def touch(self, s: Session) -> None:
+        s.last_activity = self.clock()
+
+    async def reap_idle(self) -> list[str]:
+        """Close and prune sessions idle for ``session_idle_timeout`` (no frames, no API
+        call): log closed with complete=False, ingest (WebRTC peer / file task) released,
+        removed from the registry. Returns the pruned session ids."""
+        timeout = self.settings.session_idle_timeout
+        if timeout <= 0:
+            return []
+        now = self.clock()
+        pruned = []
+        for s in list(self.sessions.values()):
+            if now - s.last_activity < timeout:
+                continue
+            if not s.closed:
+                log.warning("session %s: no frames and no API call for %.0f s -- abandoned; "
+                            "closing its log (complete=false)", s.session_id, now - s.last_activity)
+                await self._stop_ingest(s)
+                await self._finish(s, complete=False)
+            self.sessions.pop(s.session_id, None)
+            self.by_key.pop(s.key, None)
+            pruned.append(s.session_id)
+        return pruned
 
     async def shutdown(self) -> None:
+        if self._reaper is not None:
+            self._reaper.cancel()
+            await asyncio.gather(self._reaper, return_exceptions=True)
         for s in list(self.sessions.values()):
             await self._stop_ingest(s)
         await self.ingest.close()
@@ -131,6 +174,7 @@ class Core:
         s = self.by_key.get(ref.session_id)
         if s is None or s.closed:
             return
+        s.last_activity = self.clock()
         if self.pool.submit(frame, ref):
             s.submitted += 1
 
@@ -176,6 +220,7 @@ class Core:
                            taxonomy_version=self.settings.taxonomy_version)
         s = Session(sid, stand, key, LogWriter(d / "log.jsonl", header), d / "log.jsonl")
         s.crop = crop
+        s.last_activity = self.clock()
         self.sessions[sid] = s
         self.by_key[key] = s
         return s
@@ -225,6 +270,7 @@ def live_session(session_id: str, request: Request) -> Session:
     if s is None:
         raise HTTPException(404, "unknown session")
     access.check_http(core.settings, s.stand, _token(request))
+    core.touch(s)
     return s
 
 
@@ -409,9 +455,10 @@ def get_log(session_id: str, request: Request):
     s = core.sessions.get(session_id)
     if s is not None:
         access.check_http(core.settings, s.stand, _token(request))
+        core.touch(s)
         path = s.log_path
     else:  # e.g. after a server restart: serve what is on disk for a well-formed id
-        m = _ID_RE.match(session_id)
+        m = _ID_RE.fullmatch(session_id)
         path = core.settings.sessions_dir / session_id / "log.jsonl"
         if not m or not path.is_file():
             raise HTTPException(404, "unknown session")
