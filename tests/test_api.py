@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.api.config import Settings, build_app
 from app.contracts.log_schema import Detection
@@ -89,9 +90,11 @@ def test_token_required_when_enabled(client_factory):
     assert c.get(f"/sessions/{sid}/log").status_code == 401
     assert c.post(f"/sessions/{sid}/stop").status_code == 401
     assert c.get(f"/sessions/{sid}/log", headers={"X-Stand-Token": "secret"}).status_code == 200
-    with pytest.raises(Exception):
-        with c.websocket_connect(f"/sessions/{sid}/results"):
-            pass
+    # rejected with a close code the browser can see (accept, then close 4401)
+    with c.websocket_connect(f"/sessions/{sid}/results") as ws:
+        with pytest.raises(WebSocketDisconnect) as e:
+            ws.receive_json()
+    assert e.value.code == 4401
     h = {"X-Stand-Token": "secret"}
     with c.websocket_connect(f"/sessions/{sid}/results", headers=h):
         pass
@@ -194,9 +197,10 @@ def test_unknown_session_404(client_factory):
     assert c.get(f"/sessions/{bad}/log").status_code == 404
     assert c.post(f"/sessions/{bad}/offer", json={"sdp": "x", "type": "offer"}).status_code == 404
     assert c.post(f"/sessions/{bad}/file", json={"path": "a", "realtime": False}).status_code == 404
-    with pytest.raises(Exception):
-        with c.websocket_connect(f"/sessions/{bad}/results"):
-            pass
+    with c.websocket_connect(f"/sessions/{bad}/results") as ws:
+        with pytest.raises(WebSocketDisconnect) as e:
+            ws.receive_json()
+    assert e.value.code == 4404
 
 
 def test_ws_disconnect_does_not_kill_router(client_factory, tmp_path):
@@ -515,3 +519,13 @@ def test_no_tls_warning_with_tls_or_without_tokens(tmp_path, caplog, kw):
     with TestClient(build_app(make_settings(tmp_path, **kw), pool_factory=fast_pipeline)):
         pass
     assert not any("CLEAR TEXT" in r.getMessage() for r in caplog.records)
+
+
+def test_ws_for_stopped_session_closes_4404(client_factory):
+    c = client_factory()
+    sid = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
+    c.post(f"/sessions/{sid}/stop")
+    with c.websocket_connect(f"/sessions/{sid}/results") as ws:
+        with pytest.raises(WebSocketDisconnect) as e:
+            ws.receive_json()
+    assert e.value.code == 4404

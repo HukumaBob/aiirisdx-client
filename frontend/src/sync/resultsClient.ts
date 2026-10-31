@@ -3,7 +3,9 @@
  * Messages are pushed under their OWN frame_id (never relabelled). On an abnormal close it
  * reconnects with backoff and the buffer is kept (frames keep timing out meanwhile, which
  * shows them without boxes). No reconnect after a normal close 1000 (session stopped) or
- * 4401/4404 (bad token / unknown session). `?token=` is the stand-token convention.
+ * 4401/4404 (bad token / unknown session; the server accepts and then closes with these codes,
+ * so the browser sees them -- a pre-accept close would be a 1006 handshake failure).
+ * `?token=` is the stand-token convention.
  */
 import type { FrameResult } from './alignmentBuffer'
 
@@ -15,6 +17,8 @@ export interface ResultsClientOptions {
   WebSocket?: typeof WebSocket
   backoffMs?: number[]
   onState?: (s: 'connecting' | 'open' | 'closed') => void
+  /** the server refused the socket for good (4401 bad token / 4404 unknown or stopped session) */
+  onRejected?: (code: number) => void
 }
 
 const NO_RECONNECT = new Set([1000, 4401, 4404])
@@ -74,7 +78,9 @@ export class ResultsClient {
     ws.onclose = (ev: CloseEvent) => {
       this.ws = null
       this.o.onState?.('closed')
-      if (this.stopped || NO_RECONNECT.has(ev.code)) return
+      if (this.stopped) return
+      if (ev.code === 4401 || ev.code === 4404) this.o.onRejected?.(ev.code)
+      if (NO_RECONNECT.has(ev.code)) return
       const d = this.backoff[Math.min(this.attempt++, this.backoff.length - 1)]
       this.timer = setTimeout(() => {
         this.timer = null

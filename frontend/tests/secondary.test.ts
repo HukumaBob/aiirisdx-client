@@ -85,3 +85,23 @@ describe('crop outline on the downscaled secondary canvas (I1)', () => {
     vi.restoreAllMocks()
   })
 })
+
+describe('ResultsClient against the server rejection sequence (accept, then close 4401/4404)', () => {
+  for (const code of [4401, 4404]) {
+    it(`open then close ${code}: no reconnect, state closed, reason reported`, () => {
+      vi.useFakeTimers()
+      FakeWS.all = []
+      const states: string[] = []
+      const rejected = vi.fn()
+      const c = new ResultsClient({ url: 'ws://x', buffer: { pushResult: vi.fn() }, WebSocket: FakeWS as any, onState: (s) => states.push(s), onRejected: rejected })
+      c.start()
+      FakeWS.all[0].onopen?.()
+      FakeWS.all[0].onclose({ code })
+      vi.advanceTimersByTime(60000)
+      expect(FakeWS.all).toHaveLength(1)
+      expect(states).toEqual(['connecting', 'open', 'closed'])
+      expect(rejected).toHaveBeenCalledWith(code)
+      vi.useRealTimers()
+    })
+  }
+})

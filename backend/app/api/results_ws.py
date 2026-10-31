@@ -5,7 +5,10 @@ classification, anatomy, dropped}``. Messages arrive in completion order and eac
 frame_id (never relabelled). A slow client loses its oldest unsent messages (bounded buffer,
 ``Settings.ws_queue_size``); other clients and the log are unaffected. The socket is closed
 with code 1000 when the session is stopped. Auth: ``X-Stand-Token`` header or ``?token=``.
-Close codes before accept: 4404 unknown session, 4401 bad token.
+Rejections: the socket is ACCEPTED and then closed with 4404 (unknown/stopped session) or 4401
+(bad token). Closing before accept would reach the browser as an HTTP 403 handshake failure
+(close code 1006), so the stand page could not tell it from a network error and would keep
+reconnecting forever.
 """
 
 from __future__ import annotations
@@ -26,11 +29,13 @@ async def results(ws: WebSocket, session_id: str):
     core = ws.app.state.core
     s = core.sessions.get(session_id)
     if s is None or s.closed:
-        await ws.close(code=4404)
+        await ws.accept()
+        await ws.close(code=4404, reason="unknown or stopped session")
         return
     token = ws.headers.get(access.HEADER) or ws.query_params.get("token")
     if not access.token_ok(core.settings, s.stand, token):
-        await ws.close(code=4401)
+        await ws.accept()
+        await ws.close(code=4401, reason="bad stand token")
         return
     await ws.accept()
     sub = Subscriber(core.settings.ws_queue_size)

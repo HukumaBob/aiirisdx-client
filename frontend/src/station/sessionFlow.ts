@@ -412,6 +412,10 @@ export class SessionFlow {
       onState: (s) => {
         this.resultsState = s
       },
+      onRejected: (code) => {
+        this.serverError = code === 4401 ? 'results: stand token rejected (4401)' : 'results: session unknown or stopped on the server (4404)'
+        this.emit()
+      },
     })
     this.rc.start()
   }
