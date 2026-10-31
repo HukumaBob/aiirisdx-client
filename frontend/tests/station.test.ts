@@ -259,6 +259,31 @@ describe('session flow', () => {
     expect(t.calls[0].headers).toMatchObject({ 'X-Stand-Token': 'tok' })
   })
 
+  it('encoder framesSent (outbound-rtp) is reported separately from stamped frames', async () => {
+    const t = setup()
+    let framesSent = 7
+    const stats = () => ({ forEach: (cb: (r: Record<string, unknown>) => void) => [{ type: 'outbound-rtp', kind: 'video', framesSent }, { type: 'outbound-rtp', kind: 'audio', framesSent: 99 }].forEach(cb) })
+    t.connectSendStream.mockImplementation(async (_s: unknown, signal: (o: { type: string; sdp: string }) => Promise<unknown>) => {
+      await signal({ type: 'offer', sdp: 'OFFER' })
+      return { pc: { getStats: async () => stats() }, sender: {}, close: vi.fn() }
+    })
+    const flow = new SessionFlow(t.deps)
+    await flow.start(params())
+    expect(flow.getStatus()).toMatchObject({ sent: 5, encoderSent: null }) // no poll yet
+    framesSent = 4
+    const fin = await flow.stop()
+    expect(fin.sessionMeta).toMatchObject({ framesSent: 5, framesEncoderSent: 4 })
+  })
+
+  it('encoderSent stays null when the connection has no stats', async () => {
+    const t = setup()
+    const flow = new SessionFlow(t.deps)
+    await flow.start(params())
+    const fin = await flow.stop()
+    expect(fin.sessionMeta.framesEncoderSent).toBeNull()
+    expect(flow.getStatus().encoderSent).toBeNull()
+  })
+
   it('a token in the start params wins over deps.token (header and results ws)', async () => {
     const t = setup()
     const flow = new SessionFlow({ ...t.deps, token: 'old' })

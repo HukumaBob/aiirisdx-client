@@ -20,7 +20,7 @@ export interface StationPageProps {
 }
 
 const IDLE_STATUS: FlowStatus = {
-  state: 'idle', connection: 'none', results: 'none', sessionId: null, sent: 0, received: 0, dropped: 0,
+  state: 'idle', connection: 'none', results: 'none', sessionId: null, sent: 0, encoderSent: null, received: 0, dropped: 0,
   serverError: null, recorderError: null, message: '',
 }
 
@@ -215,9 +215,10 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
           <div className="statusline" data-testid="statusline">
             <span>соединение: {status.connection}</span>
             <span>результаты: {status.results}</span>
-            <span>отправлено: {status.sent}</span>
-            <span>получено: {status.received}</span>
-            <span>пропущено: {status.dropped}</span>
+            <span title="кадров помечено номером на стойке (не все доходят до кодера)">кадров снято: {status.sent}</span>
+            <span title="кадров отправлено кодером браузера (outbound-rtp framesSent)">отправлено кодером: {status.encoderSent ?? '—'}</span>
+            <span title="результатов получено от сервера (включая пропущенные)">результатов: {status.received}</span>
+            <span title="кадров, пропущенных сервером при перегрузке (dropped)">пропущено сервером: {status.dropped}</span>
             {status.message && <strong className="warn">{status.message}</strong>}
             {status.serverError && <span className="err">сервер: {status.serverError}</span>}
             {status.recorderError && <span className="err">запись: {status.recorderError}</span>}

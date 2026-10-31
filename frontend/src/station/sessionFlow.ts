@@ -70,7 +70,10 @@ export interface SessionMeta {
   crop: CropRect | null
   startedAt: string
   stoppedAt: string
+  /** frames stamped by the capture (see FlowStatus.sent; not all are transmitted) */
   framesSent: number
+  /** frames the browser encoder sent (outbound-rtp framesSent), null if unknown */
+  framesEncoderSent: number | null
   framesReceived: number
   /** frames logged by the server (from POST /stop), null if unknown */
   serverFrames: number | null
@@ -95,8 +98,18 @@ export interface FlowStatus {
   connection: Connection
   results: 'none' | 'connecting' | 'open' | 'closed'
   sessionId: string | null
+  /**
+   * frames stamped with a frame id by the capture (capture frameCount). NOT all of them are
+   * transmitted: the canvas capture track / browser encoder may skip frames (measured in
+   * Task 13: headless Chrome encoded 164 of 188 stamped frames), see `encoderSent`.
+   */
   sent: number
+  /** frames the browser's encoder actually sent (outbound-rtp framesSent, summed over
+   * connections), null until known. The server receives ~these. */
+  encoderSent: number | null
+  /** result messages received over the results WebSocket (real + dropped) */
   received: number
+  /** of those, results the server dropped under overload (dropped: true) */
   dropped: number
   /** last server / signalling error text, null if none */
   serverError: string | null
@@ -156,7 +169,11 @@ export class SessionFlow {
   private sessionId: string | null = null
   private params: StartParams | null = null
   private cap: CaptureHandle | null = null
-  private conn: { close(): void } | null = null
+  private conn: { close(): void; pc?: unknown } | null = null
+  private encSentBase = 0 // framesSent of connections already closed
+  private encSentCur = 0 // of the current connection
+  private encSentKnown = false
+  private statsTimer: ReturnType<typeof setInterval> | null = null
   private rc: ResultsClient | null = null
   private connGen = 0
   private received = 0
@@ -186,12 +203,48 @@ export class SessionFlow {
       results: this.resultsState,
       sessionId: this.sessionId,
       sent: this.cap?.frameCount ?? 0,
+      encoderSent: this.encSentKnown ? this.encSentBase + this.encSentCur : null,
       received: this.received,
       dropped: this.dropped,
       serverError: this.serverError,
       recorderError: this.recorderError,
       message,
     }
+  }
+
+  /** read outbound-rtp framesSent of the current connection (best effort) */
+  private async pollEncoder(): Promise<void> {
+    const pc = this.conn?.pc as { getStats?: () => Promise<{ forEach(cb: (r: Record<string, unknown>) => void): void }> } | undefined
+    if (!pc?.getStats) return
+    try {
+      const st = await pc.getStats()
+      let n = 0
+      let seen = false
+      st.forEach((r) => {
+        if (r.type === 'outbound-rtp' && r.kind === 'video' && typeof r.framesSent === 'number') {
+          n += r.framesSent
+          seen = true
+        }
+      })
+      if (seen) {
+        this.encSentCur = n
+        this.encSentKnown = true
+      }
+    } catch {
+      /* stats are diagnostics only */
+    }
+  }
+
+  private dropConn() {
+    this.encSentBase += this.encSentCur
+    this.encSentCur = 0
+    this.conn?.close()
+    this.conn = null
+  }
+
+  private stopStatsTimer() {
+    if (this.statsTimer) clearInterval(this.statsTimer)
+    this.statsTimer = null
   }
 
   private emit() {
@@ -260,6 +313,9 @@ export class SessionFlow {
     this.connection = 'none'
     this.resultsState = 'none'
     this.received = this.dropped = 0
+    this.encSentBase = this.encSentCur = 0
+    this.encSentKnown = false
+    this.stopStatsTimer()
     this.serverError = this.recorderError = null
     this.buffer = null
     this.disposedBuffer = false
@@ -320,8 +376,8 @@ export class SessionFlow {
   private cleanupAfterFailedStart() {
     this.rc?.stop()
     this.rc = null
-    this.conn?.close()
-    this.conn = null
+    this.stopStatsTimer()
+    this.dropConn()
     this.cap?.stop()
     this.cap = null
     this.disposeBuffer()
@@ -368,6 +424,10 @@ export class SessionFlow {
       )
       if (gen !== this.connGen) return c.close()
       this.conn = c
+      this.encSentCur = 0
+      if (!this.statsTimer && typeof setInterval !== 'undefined') {
+        this.statsTimer = setInterval(() => void this.pollEncoder().then(() => this.emit()), 1000)
+      }
       this.connection = 'connected'
       this.serverError = null
       this.set('running')
@@ -388,8 +448,7 @@ export class SessionFlow {
     if (!this.cap || !this.params || (this.state !== 'server-lost' && this.state !== 'running')) {
       throw new Error('nothing to reconnect')
     }
-    this.conn?.close()
-    this.conn = null
+    this.dropConn()
     if (!this.sessionId) {
       try {
         this.sessionId = await this.createSession()
@@ -459,9 +518,11 @@ export class SessionFlow {
       }
     }
     const framesSent = cap?.frameCount ?? 0
+    this.stopStatsTimer()
+    await this.pollEncoder()
+    const framesEncoderSent = this.encSentKnown ? this.encSentBase + this.encSentCur : null
     cap?.stop()
-    this.conn?.close()
-    this.conn = null
+    this.dropConn()
 
     let log: string | null = null
     let serverFrames: number | null = null
@@ -500,6 +561,7 @@ export class SessionFlow {
         startedAt: this.startedAt,
         stoppedAt: new Date().toISOString(),
         framesSent,
+        framesEncoderSent,
         framesReceived: this.received,
         serverFrames,
       },
