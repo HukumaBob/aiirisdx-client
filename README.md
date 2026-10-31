@@ -88,8 +88,10 @@ Building offline:
   deploy/requirements.txt`; when the directory contains wheels the build uses `--no-index`),
   and the BuildKit npm/pip cache mounts for warm rebuilds.
 
-**Workers.** `AIIRIS_WORKERS` (default 1) -- see `tests/load/README.md` for the measured
-stream capacity per GPU. Each worker is a process with its own model copy; workers warm up
+**Workers / capacity.** `AIIRIS_WORKERS=2` in `.env.example` (code default 1): measured
+on an RTX 2070 + Ryzen 5 3500, 2 workers carry **4 streams of 1080p30** with 0 % drops and
+p95 latency 19 ms; the CPU is the bottleneck (`tests/load/README.md`; re-measure on the target
+server). Each worker is a process with its own model copy; workers warm up
 (`AIIRIS_WARMUP_FRAMES`) before `/health` reports `ready`.
 
 **Acceptance.** With the stack up: `AIIRIS_E2E_BASE_URL=http://localhost:8080/api
