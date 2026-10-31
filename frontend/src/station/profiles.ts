@@ -71,10 +71,12 @@ export interface StationData {
   doctors: string[]
   lastDoctor: string
   profiles: Record<string, DoctorProfile>
+  /** EMR endpoint for the result container; empty = no delivery (download only) */
+  emrUrl: string
 }
 
 export function emptyData(): StationData {
-  return { version: STORAGE_VERSION, stand: '', doctors: [], lastDoctor: '', profiles: {} }
+  return { version: STORAGE_VERSION, stand: '', doctors: [], lastDoctor: '', profiles: {}, emrUrl: '' }
 }
 
 export function cleanDoctorName(name: string): string {
@@ -93,6 +95,7 @@ export function migrate(raw: string | null): StationData {
   }
   if (!isObj(j)) return d
   if (typeof j.stand === 'string') d.stand = j.stand.trim().slice(0, 32)
+  if (typeof j.emrUrl === 'string') d.emrUrl = j.emrUrl.trim().slice(0, 512)
   // v0 stored doctors as objects {name, ...profile}; v1 as names + a profiles map
   const profiles = isObj(j.profiles) ? j.profiles : {}
   if (Array.isArray(j.doctors)) {
@@ -125,6 +128,14 @@ export class StationStore {
   }
   setStand(stand: string) {
     this.data.stand = stand.trim().slice(0, 32)
+    this.save()
+  }
+
+  get emrUrl() {
+    return this.data.emrUrl
+  }
+  setEmrUrl(url: string) {
+    this.data.emrUrl = url.trim().slice(0, 512)
     this.save()
   }
 

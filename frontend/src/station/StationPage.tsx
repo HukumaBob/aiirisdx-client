@@ -4,6 +4,8 @@
  * screen. All logic lives in profiles.ts / cropRect.ts / sessionFlow.ts; this is the view.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { buildAndDeliver, type ContainerOutcome } from '../container/finish'
+import { downloadBlob } from '../container/deliver'
 import { SecondaryScreen, openSecondaryWindow } from '../secondary/SecondaryScreen'
 import { CropEditor } from './CropEditor'
 import type { CropRect } from './cropRect'
@@ -47,6 +49,10 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   const [status, setStatus] = useState<FlowStatus>(IDLE_STATUS)
   const [error, setError] = useState<string | null>(null)
   const [finished, setFinished] = useState<FinishedSession | null>(null)
+  const [emrUrl, setEmrUrl] = useState(store.emrUrl)
+  const emrUrlRef = useRef(emrUrl)
+  emrUrlRef.current = emrUrl
+  const [outcome, setOutcome] = useState<ContainerOutcome | null>(null)
   const [win, setWin] = useState<Window | null>(null)
   const [showInPage, setShowInPage] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -58,6 +64,8 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
         onStatus: setStatus,
         onFinished: (f) => {
           setFinished(f)
+          setOutcome(null)
+          void buildAndDeliver(f, emrUrlRef.current).then(setOutcome)
           onFinished?.(f)
         },
       }),
@@ -159,6 +167,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   const start = async () => {
     setError(null)
     setFinished(null)
+    setOutcome(null)
     if (!check.ok) return setError(`Укажите: ${check.reasons.map((r) => REASON_RU[r]).join(', ')}`)
     stopPreview()
     // the secondary screen popup must be opened from the click
@@ -220,6 +229,19 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
               {finished.error && <span className="err"> ({finished.error})</span>}
             </div>
           )}
+          {finished && (
+            <div className="done" data-testid="container-status">
+              {!outcome ? 'Контейнер: сборка…' : outcome.delivery === 'no-recording' ? `Контейнер не собран: ${outcome.error}` : (
+                <>
+                  {outcome.delivery === 'delivered' && 'Контейнер: доставлен в EMR'}
+                  {outcome.delivery === 'saved' && 'Контейнер: готов (URL EMR не задан)'}
+                  {outcome.delivery === 'failed' && `Контейнер: сохранён локально — доставка не удалась: ${outcome.error}`}
+                  {!outcome.logComplete && <strong className="warn"> — лог неполный{finished.log === null ? ' (сервер потерян)' : ''}</strong>}
+                  {outcome.blob && <> <button type="button" onClick={() => downloadBlob(outcome.blob!, outcome.filename)}>Сохранить контейнер</button></>}
+                </>
+              )}
+            </div>
+          )}
           {showInPage && secondary}
         </section>
 
@@ -240,6 +262,9 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
               <button type="button" onClick={removeDoctor} disabled={!doctor}>Удалить</button>
             </div>
           )}
+          <label>URL EMR (пусто — без отправки)
+            <input value={emrUrl} placeholder="https://emr.example/api/results" onChange={(e) => { setEmrUrl(e.target.value); store.setEmrUrl(e.target.value) }} />
+          </label>
           <fieldset disabled={!doctor}>
             <legend>Профиль врача</legend>
             <label>Порог сигнала: {profile.alertThreshold.toFixed(2)}
