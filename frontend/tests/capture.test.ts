@@ -18,6 +18,7 @@ import {
   FakeMediaRecorder,
   FakePeerConnection,
   FakeSender,
+  type FakeTrack,
   FakeTransceiver,
   makeFrame,
   type Rgba,
@@ -105,6 +106,23 @@ describe('frame-id encoder (TS port)', () => {
 })
 
 describe('capture pipeline', () => {
+  it('onSourceEnded fires once when the device vanishes, not after stop()', async () => {
+    const media = new FakeMedia()
+    let ended = 0
+    handle = await startCapture('card-1', { env: media.env(), onSourceEnded: () => ended++ })
+    const track = handle.sourceStream.getVideoTracks()[0] as unknown as FakeTrack
+    media.emitFrames(3)
+    track.end()
+    expect(ended).toBe(1)
+    handle.stop() // our own stop ends the tracks too: must not be reported as a loss
+    expect(ended).toBe(1)
+    const media2 = new FakeMedia()
+    const h2 = await startCapture('card-1', { env: media2.env(), onSourceEnded: () => ended++ })
+    h2.stop()
+    ;(h2.sourceStream.getVideoTracks()[0] as unknown as FakeTrack).end()
+    expect(ended).toBe(1)
+  })
+
   it('test_frame_ids_strictly_increasing', async () => {
     const media = new FakeMedia()
     const h = await capture(media)

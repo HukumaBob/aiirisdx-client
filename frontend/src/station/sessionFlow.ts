@@ -30,6 +30,7 @@ import { ResultsClient } from '../sync/resultsClient'
 import { validateCrop } from './cropRect'
 
 export const SERVER_LOST_MSG = 'server lost — recording continues'
+export const SOURCE_LOST_MSG = 'сигнал с камеры потерян — новых кадров нет; нажмите «Стоп», запись до обрыва сохранится'
 export const SECONDARY_WIDTH = 960
 /** default secondary-screen result timeout (profile.bufferTimeoutMs overrides) */
 export const DEFAULT_BUFFER_TIMEOUT_MS = 3000
@@ -121,6 +122,8 @@ export interface FlowStatus {
   /** last server / signalling error text, null if none */
   serverError: string | null
   recorderError: string | null
+  /** the camera / capture card vanished mid-session: no more frames, the recording so far is kept */
+  sourceLost: boolean
   message: string
 }
 
@@ -187,6 +190,7 @@ export class SessionFlow {
   private dropped = 0
   private serverError: string | null = null
   private recorderError: string | null = null
+  private sourceLost = false
   private startedAt = ''
   private pushChain: Promise<void> = Promise.resolve()
   private disposedBuffer = false
@@ -204,6 +208,7 @@ export class SessionFlow {
   getStatus(): FlowStatus {
     let message = ''
     if (this.state === 'server-lost') message = SERVER_LOST_MSG
+    if (this.sourceLost) message = SOURCE_LOST_MSG
     return {
       state: this.state,
       connection: this.connection,
@@ -215,6 +220,7 @@ export class SessionFlow {
       dropped: this.dropped,
       serverError: this.serverError,
       recorderError: this.recorderError,
+      sourceLost: this.sourceLost,
       message,
     }
   }
@@ -327,6 +333,7 @@ export class SessionFlow {
     this.encSentKnown = false
     this.stopStatsTimer()
     this.serverError = this.recorderError = null
+    this.sourceLost = false
     this.buffer = null
     this.disposedBuffer = false
     this.pushChain = Promise.resolve()
@@ -366,6 +373,10 @@ export class SessionFlow {
         this.emit()
       },
       onFrameBitmap: (id, bm) => this.onBitmap(id, bm),
+      onSourceEnded: () => {
+        this.sourceLost = true
+        this.emit()
+      },
     })
     this.cap = cap
     if (p.crop) {

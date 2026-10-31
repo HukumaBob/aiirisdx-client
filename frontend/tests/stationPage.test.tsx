@@ -100,3 +100,32 @@ describe('capture format on the stand page (C3)', () => {
     expect(sc).toHaveBeenCalledWith('card-1', expect.objectContaining({ width: 1280, height: 720, fps: 30 }))
   })
 })
+
+describe('camera that drops out and comes back', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('re-opens the preview on devicechange and clears the stale camera error', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+    let present = false
+    const listeners: (() => void)[] = []
+    const stream = { getVideoTracks: () => [{ getSettings: () => ({ width: 640, height: 480, frameRate: 30 }) }], getTracks: () => [{ stop: vi.fn() }] }
+    const getUserMedia = vi.fn(async () => {
+      if (!present) throw new Error('Requested device not found')
+      return stream
+    })
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => (present ? [{ kind: 'videoinput', deviceId: 'cam', label: 'Cam' }] : []),
+        addEventListener: (_: string, cb: () => void) => listeners.push(cb),
+        removeEventListener: () => {},
+      },
+    })
+    render(<StationPage deps={setup(true).deps} />)
+    await waitFor(() => expect(screen.getByText(/камера: Requested device not found/)).toBeInTheDocument())
+    present = true // the USB device re-enumerates under the same id
+    await act(async () => listeners.forEach((cb) => cb()))
+    await waitFor(() => expect(screen.queryByText(/камера:/)).not.toBeInTheDocument())
+    expect(getUserMedia).toHaveBeenCalledTimes(2)
+  })
+})

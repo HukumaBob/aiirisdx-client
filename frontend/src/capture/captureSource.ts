@@ -75,6 +75,11 @@ export interface CaptureOptions {
    * frame) line up exactly. The receiver owns the bitmap and must close() it.
    */
   onFrameBitmap?: (frameId: number, bitmap: ImageBitmap) => void
+  /**
+   * The source's video track ended on its own (capture card / camera unplugged or re-enumerated,
+   * driver reset). Not called after stop(). Frames stop; the recording keeps what it has.
+   */
+  onSourceEnded?: () => void
 }
 
 export type FrameListener = (f: FrameInfo) => void
@@ -173,7 +178,11 @@ async function buildPipeline(source: MediaStream, env: CaptureEnv, opts: Capture
   const settings = track.getSettings()
   const fps = opts.fps ?? settings.frameRate ?? 30
 
+  let running = true
   const video = env.createVideo()
+  // a vanished device ends its track without any other signal: tell the owner, or the
+  // session would just sit there with no frames
+  track.addEventListener?.('ended', () => running && opts.onSourceEnded?.())
   video.muted = true
   video.playsInline = true
   video.srcObject = source
@@ -195,7 +204,6 @@ async function buildPipeline(source: MediaStream, env: CaptureEnv, opts: Capture
   let counter = 0
   let t0: number | null = null
   let lastPts = -Infinity
-  let running = true
 
   const recorder = new LocalRecorder({
     MediaRecorder: env.MediaRecorder,

@@ -54,10 +54,17 @@ function parseColor(style: string): [number, number, number] {
   throw new Error(`fake canvas: unsupported fillStyle ${style}`)
 }
 
-export class FakeTrack {
+export class FakeTrack extends EventTarget {
   kind = 'video'
   readyState = 'live'
-  constructor(private settings: { width: number; height: number; frameRate: number }) {}
+  constructor(private settings: { width: number; height: number; frameRate: number }) {
+    super()
+  }
+  /** the device vanished: the browser ends the track and fires 'ended' */
+  end() {
+    this.readyState = 'ended'
+    this.dispatchEvent(new Event('ended'))
+  }
   getSettings() {
     return { ...this.settings }
   }

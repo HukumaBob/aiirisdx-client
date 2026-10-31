@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { contentRect, cropFromDrag, frameToScreen, rectFromPoints, screenToFrame, validateCrop } from '../src/station/cropRect'
 import { DEFAULT_DOCTOR_PROFILE, migrate, safeStorage, StationStore, STORAGE_KEY, type SafeStorage } from '../src/station/profiles'
-import { canStart, SERVER_LOST_MSG, SessionFlow, type FlowDeps, type StartParams } from '../src/station/sessionFlow'
+import { canStart, SERVER_LOST_MSG, SOURCE_LOST_MSG, SessionFlow, type FlowDeps, type StartParams } from '../src/station/sessionFlow'
 
 // ---------------------------------------------------------------- crop
 describe('test_crop_rect_validation', () => {
@@ -182,7 +182,7 @@ function setup(opts: { fetchImpl?: (url: string, init?: RequestInit) => Promise<
     stop: vi.fn(async () => ({ videoBlob: new Blob(['v']), mimeType: 'video/webm', frameTable: [{ frameId: 0, pts: 0 }], recordingStartOffset: 0, crop: null })),
   }
   const handle = { sendStream: { id: 'send' }, sourceStream: {}, localRecorder: recorder, width: 1920, height: 1080, fps: 30, frameCount: 5, stop: vi.fn() }
-  let captureOpts: { onFrameBitmap?: (id: number, bm: ImageBitmap) => void } = {}
+  let captureOpts: { onFrameBitmap?: (id: number, bm: ImageBitmap) => void; onSourceEnded?: () => void } = {}
   const startCapture = vi.fn(async (_d: string, o: typeof captureOpts) => ((captureOpts = o), handle))
   let lost: ((s: string) => void) | undefined
   const connections: { close: ReturnType<typeof vi.fn> }[] = []
@@ -273,6 +273,20 @@ describe('session flow', () => {
     framesSent = 4
     const fin = await flow.stop()
     expect(fin.sessionMeta).toMatchObject({ framesSent: 5, framesEncoderSent: 4 })
+  })
+
+  it('a vanished camera is reported (message + sourceLost) and the session can still be stopped', async () => {
+    const t = setup()
+    const flow = new SessionFlow(t.deps)
+    await flow.start(params())
+    expect(flow.getStatus().sourceLost).toBe(false)
+    t.captureOpts().onSourceEnded?.()
+    expect(flow.getStatus()).toMatchObject({ state: 'running', sourceLost: true })
+    expect(flow.getStatus().message).toBe(SOURCE_LOST_MSG)
+    const fin = await flow.stop() // what was recorded before the loss is still delivered
+    expect(fin.video).toBeTruthy()
+    await flow.start(params())
+    expect(flow.getStatus().sourceLost).toBe(false) // a new session starts clean
   })
 
   it('encoderSent stays null when the connection has no stats', async () => {

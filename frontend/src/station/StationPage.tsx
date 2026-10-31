@@ -22,7 +22,7 @@ export interface StationPageProps {
 
 const IDLE_STATUS: FlowStatus = {
   state: 'idle', connection: 'none', results: 'none', sessionId: null, sent: 0, encoderSent: null, received: 0, dropped: 0,
-  serverError: null, recorderError: null, message: '',
+  serverError: null, recorderError: null, sourceLost: false, message: '',
 }
 
 const REASON_RU = { stand: 'номер стойки', doctor: 'врач', file: 'путь к файлу' } as const
@@ -101,10 +101,17 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       setError(`устройства: ${e instanceof Error ? e.message : e}`)
     }
   }, [])
+  // a camera that re-enumerates keeps its deviceId, so the preview effect would not re-run:
+  // bump a counter on every device change to re-open it
+  const [deviceEpoch, setDeviceEpoch] = useState(0)
   useEffect(() => {
+    const onChange = () => {
+      void refreshDevices()
+      setDeviceEpoch((n) => n + 1)
+    }
     void refreshDevices()
-    navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices)
-    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices)
+    navigator.mediaDevices?.addEventListener?.('devicechange', onChange)
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', onChange)
   }, [refreshDevices])
 
   // ---- preview (own stream while idle; the capture's source while a session runs)
@@ -139,6 +146,9 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
         if (cancelled) return s.getTracks().forEach((t) => t.stop())
         stopPreview()
         previewRef.current = s
+        setError((cur) => (cur?.startsWith('камера:') ? null : cur)) // the device is back
+        // the camera vanished while idle: say so; devicechange re-opens it when it returns
+        s.getVideoTracks()[0]?.addEventListener?.('ended', () => !cancelled && setError('камера: сигнал потерян, ожидаем устройство…'))
         setNegotiated(negotiatedOf(s))
         v.srcObject = s
         void v.play().catch(() => {})
@@ -149,7 +159,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       cancelled = true
       stopPreview()
     }
-  }, [active, mode, deviceId, flow, stopPreview, refreshDevices, captureStream, captureFormat])
+  }, [active, mode, deviceId, flow, stopPreview, refreshDevices, captureStream, captureFormat, deviceEpoch])
 
   // ---- doctor / profile
   const chooseDoctor = (name: string) => {
