@@ -297,15 +297,17 @@ describe('session flow', () => {
     const t = setup({
       fetchImpl: async (url) => {
         const json = (b: unknown) => ({ ok: true, status: 200, json: async () => b }) as unknown as Response
-        if (url.endsWith('/client-config')) return json({ ice_servers: ice, require_token: false })
+        if (url.includes('/client-config')) return json({ ice_servers: ice, require_token: false })
         if (url.endsWith('/sessions')) return json({ session_id: 'stand-1_20260101T000000_abc' })
         return json({ sdp: 'ANSWER', type: 'answer' })
       },
     })
     const { loadRtcConfig: _drop, ...deps } = t.deps
     void _drop
-    await new SessionFlow(deps as FlowDeps).start(params())
-    expect(t.calls.map((c) => c.url)).toContain('/api/client-config')
+    await new SessionFlow(deps as FlowDeps).start(params({ token: 'tok-1' }))
+    const cc = t.calls.find((c) => c.url.includes('/client-config'))
+    expect(cc?.url).toBe('/api/client-config?stand=stand-1') // stand + token authorize TURN
+    expect(cc?.headers).toMatchObject({ 'X-Stand-Token': 'tok-1' })
     expect(t.connectSendStream.mock.calls[0][2]).toMatchObject({ configuration: { iceServers: ice } })
   })
 
@@ -313,7 +315,7 @@ describe('session flow', () => {
     const t = setup({
       fetchImpl: async (url) => {
         const json = (b: unknown, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => b }) as unknown as Response
-        if (url.endsWith('/client-config')) return json({}, false)
+        if (url.includes('/client-config')) return json({}, false)
         if (url.endsWith('/sessions')) return json({ session_id: 'stand-1_20260101T000000_abc' })
         return json({ sdp: 'ANSWER', type: 'answer' })
       },

@@ -65,6 +65,15 @@ def create_app(settings: Settings, pipeline_factory: Callable[[], Pipeline]) -> 
 
 def app_from_env() -> FastAPI:
     """uvicorn entry: ``uvicorn app.api.main:app_from_env --factory``."""
+    from pydantic import ValidationError
+
     from app.api.config import build_app
 
-    return build_app(Settings())
+    try:
+        settings = Settings()
+    except ValidationError as e:
+        # only the messages: the default text echoes every input value (secrets, tokens)
+        msgs = "; ".join(f"{'.'.join(map(str, x['loc'])) or 'settings'}: {x['msg']}"
+                         for x in e.errors())
+        raise SystemExit(f"invalid AIIRIS_* configuration: {msgs}") from None
+    return build_app(settings)

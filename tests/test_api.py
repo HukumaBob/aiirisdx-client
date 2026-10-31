@@ -266,17 +266,85 @@ def test_client_config_turn_credentials(client_factory):
 
     c = client_factory(ice_servers=[{"urls": "stun:stun.example:3478"}],
                        turn_urls=["turn:turn.example:3478"], turn_secret="s3", turn_ttl=600,
-                       require_token=True)
-    j = c.get("/client-config").json()
+                       require_token=True, stand_tokens={"s1": "tok1", "s2": "tok2"})
+    # token required: no TURN credentials for anonymous / wrong-token / other-stand callers
+    assert c.get("/client-config").status_code == 401
+    assert c.get("/client-config", params={"stand": "s1"}).status_code == 401
+    assert c.get("/client-config", params={"stand": "s1"},
+                 headers={"X-Stand-Token": "bad"}).status_code == 401
+    assert c.get("/client-config", params={"stand": "s1"},
+                 headers={"X-Stand-Token": "tok2"}).status_code == 401
+    assert c.get("/client-config", params={"stand": "nope"},
+                 headers={"X-Stand-Token": "tok1"}).status_code == 401
+    assert c.get("/client-config", params={"stand": "../x"},
+                 headers={"X-Stand-Token": "tok1"}).status_code == 422
+    r = c.get("/client-config", params={"stand": "s1"}, headers={"X-Stand-Token": "tok1"})
+    assert r.status_code == 200
+    j = r.json()
     assert j["require_token"] is True
     assert j["ice_servers"][0] == {"urls": "stun:stun.example:3478"}
     turn = j["ice_servers"][1]
     assert turn["urls"] == ["turn:turn.example:3478"]
     expiry, user = turn["username"].split(":")
-    assert user == "stand" and int(expiry) > 0
+    assert user == "s1" and int(expiry) > 0
     want = base64.b64encode(hmac.new(b"s3", turn["username"].encode(), hashlib.sha1).digest()).decode()
     assert turn["credential"] == want
     assert turn_credentials("s3", 600, "u", now=1000.0)[0] == "1600:u"
+
+
+def test_client_config_open_when_token_not_required(client_factory):
+    c = client_factory(turn_urls=["turn:t.example:3478"], turn_secret="s3")
+    assert c.get("/client-config").status_code == 200
+    j = c.get("/client-config", params={"stand": "s9"}).json()
+    assert j["ice_servers"][0]["username"].endswith(":s9")
+
+
+def test_turn_ttl_default_is_short():
+    from app.api.config import Settings
+
+    assert Settings().turn_ttl <= 7200
+
+
+@pytest.mark.parametrize("kw", [
+    dict(turn_urls=["turn:t:3478"]),
+    dict(turn_urls=["turn:t:3478"], turn_secret=""),
+    dict(turn_urls=["turn:t:3478"], turn_secret="  "),
+    dict(turn_urls=["turn:t:3478"], turn_secret="change-me"),
+    dict(turn_urls=["turn:t:3478"], turn_secret="CHANGEME"),
+    dict(require_token=True),
+    dict(require_token=True, stand_tokens={}),
+    dict(require_token=True, stand_tokens={"s1": "ok-token", "s2": "change-me"}),
+    dict(require_token=True, stand_tokens={"s1": ""}),
+])
+def test_settings_refuse_placeholder_secrets(kw):
+    from pydantic import ValidationError
+
+    from app.api.config import Settings
+
+    with pytest.raises(ValidationError, match="placeholder|empty"):
+        Settings(**kw)
+
+
+def test_settings_accept_real_secrets_and_no_turn(monkeypatch):
+    from app.api.config import Settings
+
+    Settings(turn_urls=["turn:t:3478"], turn_secret="9f" * 16)
+    Settings(require_token=True, stand_tokens={"s1": "x" * 20})
+    Settings(turn_secret="change-me")  # no TURN configured: the secret is unused
+    monkeypatch.setenv("AIIRIS_TURN_URLS", '["turn:t:3478"]')
+    monkeypatch.setenv("AIIRIS_TURN_SECRET", "change-me")
+    with pytest.raises(Exception, match="placeholder"):
+        Settings()  # the env path used by app_from_env refuses too
+
+
+def test_app_from_env_refuses_to_start_with_placeholder(monkeypatch):
+    from app.api.main import app_from_env
+
+    monkeypatch.setenv("AIIRIS_REQUIRE_TOKEN", "true")
+    monkeypatch.setenv("AIIRIS_STAND_TOKENS", '{"stand-1": "change-me", "stand-2": "real-s3cret"}')
+    with pytest.raises(SystemExit, match="placeholder") as ei:
+        app_from_env()
+    assert "real-s3cret" not in str(ei.value)  # the error never echoes configured secrets
 
 
 def test_client_config_without_turn(client_factory):

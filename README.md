@@ -15,9 +15,9 @@ Everything is in `deploy/`: `docker-compose.yml`, `Dockerfile.backend`,
 
 ```
 cd deploy
-cp .env.example .env            # edit: profile, ports, weights, TURN, token
+cp .env.example .env            # minimal: works as is (gpu profile, no TURN, no token)
 cp /path/to/detector.pt weights/detect.pt   # and set AIIRIS_DETECT_WEIGHTS=/weights/detect.pt
-docker compose up -d --build    # COMPOSE_PROFILES in .env selects gpu or cpu
+docker compose up -d --build    # COMPOSE_PROFILES in .env selects gpu or cpu (+ turn)
 curl http://localhost:8080/api/health        # {"status":"ok","ready":true,...}
 ```
 
@@ -27,7 +27,7 @@ Services:
 |---|---|---|
 | `backend` (profile `gpu`) / `backend-cpu` (profile `cpu`) | FastAPI + inference pool; uvicorn `app.api.main:app_from_env` | 8000 inside; `127.0.0.1:${AIIRIS_BACKEND_PORT}` for diagnostics |
 | `frontend` | nginx: the stand page (static Vite build) + reverse proxy `/api/*` -> backend (REST and the results WebSocket, upgrade headers) | `${AIIRIS_HTTP_PORT}` (8080), `${AIIRIS_HTTPS_PORT}` (8443, only with certs) |
-| `coturn` | TURN/STUN for the WebRTC stream | `${TURN_PORT}` (3478) udp+tcp, relay `${TURN_MIN_PORT}-${TURN_MAX_PORT}` udp |
+| `coturn` (profile `turn`, opt-in) | TURN/STUN for the WebRTC stream | `${TURN_PORT}` (3478) udp+tcp, relay `${TURN_MIN_PORT}-${TURN_MAX_PORT}` udp |
 
 There is no Redis/Celery service: the backend keeps its state in-process and on the
 sessions volume (the `redis`/`celery` packages in `pyproject.toml` are unused and are not in
@@ -47,17 +47,28 @@ then runs at a few fps -- for tests and file mode, not for live use).
 **Cloud vs on-prem.**
 
 * *Inside the hospital network* (default): `AIIRIS_REQUIRE_TOKEN=false`, no authorization
-  (spec §3). The stand browser and the backend are on one LAN; TURN is usually not needed but
-  harmless.
+  (spec §3). The stand browser and the backend are on one LAN; TURN is usually not needed
+  (the `.env.example` default: `AIIRIS_TURN_URLS=[]`, no `turn` profile). If it is needed
+  (stands in another subnet behind NAT), enable it as below with `TURN_EXTERNAL_IP` = the
+  server's LAN IP and `TURN_ALLOWED_PEER_IP` = that same IP (or the stands' LAN range): the
+  shipped `coturn.conf` denies relaying to every private range, and this is the one carve-out.
 * *Cloud*: set `AIIRIS_REQUIRE_TOKEN=true` and `AIIRIS_STAND_TOKENS={"stand-1": "<random>"}`;
   enter the token at the stand page ("Токен стойки", stored in the stand's browser). Enable
   TLS. TURN is required: the backend container has only private addresses, and the stand is
-  behind the hospital NAT.
+  behind the hospital NAT. Leave `TURN_ALLOWED_PEER_IP` empty: coturn then relays only to
+  public addresses (the backend allocates on the same TURN server, so the session runs
+  relay-to-relay on the public `TURN_EXTERNAL_IP`), never into the VPC or the docker networks.
 
-**TURN / ICE.** coturn runs with `use-auth-secret`; set the same random value in
-`TURN_SECRET` and `AIIRIS_TURN_SECRET`. The backend derives time-limited credentials
-(`AIIRIS_TURN_TTL`, TURN REST API scheme) for its own aiortc peer and hands them to the stand
-page via `GET /api/client-config`. `AIIRIS_TURN_URLS` must be reachable **from the backend
+**TURN / ICE.** Enable with `COMPOSE_PROFILES=gpu,turn` (or `cpu,turn`). coturn runs with
+`use-auth-secret`; set the same random value (`openssl rand -hex 32`) in `TURN_SECRET` and
+`AIIRIS_TURN_SECRET` -- both are empty in `.env.example`: coturn exits and the backend refuses
+to start when TURN URLs are set with an empty or `change-me` secret (likewise the backend
+refuses `AIIRIS_REQUIRE_TOKEN=true` with no tokens or placeholder tokens). The backend derives
+time-limited credentials (`AIIRIS_TURN_TTL`, default 2 h; must exceed the longest session, a
+reconnect fetches fresh ones; TURN REST API scheme) for its own aiortc peer and hands them to
+the stand page via `GET /api/client-config?stand=<stand>`; with `AIIRIS_REQUIRE_TOKEN=true`
+that call needs the stand's `X-Stand-Token` (401 otherwise), so anonymous clients get no TURN
+credentials. `AIIRIS_TURN_URLS` must be reachable **from the backend
 container and from the stands** -- the host's public IP / DNS name (cloud) or LAN IP
 (on-prem), never `localhost` (inside the container that is the container itself; a wrong
 TURN URL delays every connection by the TURN timeout, ~5 s, measured). Set

@@ -2,6 +2,7 @@
 #   cp .env.example .env    # edit
 #   docker compose --profile gpu up -d --build     # NVIDIA GPU (default in .env.example)
 #   docker compose --profile cpu up -d --build     # machine without a GPU
+#   add the profile "turn" (e.g. COMPOSE_PROFILES=gpu,turn) to also run coturn
 # Services: backend (FastAPI + inference pool), frontend (nginx: stand page + /api proxy),
 # coturn (TURN). No redis: the backend keeps all state in-process and on the sessions volume.
 # See README.md "Deployment".
@@ -94,16 +95,28 @@ services:
   coturn:
     image: coturn/coturn:4.6
     restart: unless-stopped
-    profiles: ["gpu", "cpu", "turn"]
+    # opt-in: COMPOSE_PROFILES=gpu,turn (or cpu,turn); needs TURN_SECRET
+    profiles: ["turn"]
+    environment:
+      # checked at container start (compose would also check `:?` for inactive profiles)
+      TURN_SECRET: ${TURN_SECRET:-}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-}
+      TURN_ALLOWED_PEER_IP: ${TURN_ALLOWED_PEER_IP:-}
+    # a shell so the on-prem allowed-peer-ip carve-out is passed only when set, and the
+    # secret does not appear in `docker inspect` args ($$ = literal $ for the container shell)
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - -c
-      - /etc/coturn/turnserver.conf
-      - --static-auth-secret=${TURN_SECRET:?set TURN_SECRET in .env (same as AIIRIS_TURN_SECRET)}
-      - --realm=${TURN_REALM:-aiirisdx}
-      - --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
-      - --listening-port=${TURN_PORT:-3478}
-      - --min-port=${TURN_MIN_PORT:-49160}
-      - --max-port=${TURN_MAX_PORT:-49200}
+      - >-
+        case "$$TURN_SECRET" in ""|change-me|changeme|CHANGE-ME|CHANGEME) echo "coturn: TURN_SECRET is empty or a placeholder; set it in .env (openssl rand -hex 32)" >&2; exit 1;; esac;
+        [ -n "$$TURN_EXTERNAL_IP" ] || { echo "coturn: set TURN_EXTERNAL_IP in .env" >&2; exit 1; };
+        exec turnserver -c /etc/coturn/turnserver.conf
+        --static-auth-secret="$$TURN_SECRET"
+        --realm=${TURN_REALM:-aiirisdx}
+        --external-ip="$$TURN_EXTERNAL_IP"
+        --listening-port=${TURN_PORT:-3478}
+        --min-port=${TURN_MIN_PORT:-49160}
+        --max-port=${TURN_MAX_PORT:-49200}
+        $${TURN_ALLOWED_PEER_IP:+--allowed-peer-ip=$$TURN_ALLOWED_PEER_IP}
     volumes:
       - ./coturn.conf:/etc/coturn/turnserver.conf:ro
     ports:

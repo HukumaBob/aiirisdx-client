@@ -324,12 +324,22 @@ def health(request: Request):
 
 
 @router.get("/client-config")
-def client_config(request: Request):
+def client_config(request: Request, stand: str | None = None):
     """What the stand page needs before connecting: ICE servers (STUN/TURN with fresh
-    time-limited TURN credentials) and whether a stand token is required. No auth: the TURN
-    credential is time-limited, and the token itself is never revealed."""
+    time-limited TURN credentials) and whether a stand token is required.
+
+    Auth: the same per-stand check as every other endpoint. With ``require_token`` on, the
+    caller must name its ``?stand=`` and send that stand's ``X-Stand-Token``, otherwise 401
+    -- TURN credentials are never handed to anonymous clients. With it off nothing is checked
+    (``stand`` is optional and only labels the TURN username)."""
     settings = core_of(request).settings
-    return {"ice_servers": settings.ice_servers_now("stand"),
+    if stand is not None and not re.fullmatch(STAND_RE, stand):
+        raise HTTPException(422, "invalid stand")
+    if settings.require_token:
+        if stand is None:
+            raise HTTPException(401, "missing stand (?stand=) and stand token")
+        access.check_http(settings, stand, _token(request))
+    return {"ice_servers": settings.ice_servers_now(stand or "stand"),
             "require_token": settings.require_token}
 
 

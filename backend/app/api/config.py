@@ -24,7 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import FastAPI
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.pipeline.runner import Pipeline, StageConfig
@@ -50,13 +50,31 @@ class Settings(BaseSettings):
     # the shared secret (TURN REST API scheme) for both the server's peer and the browsers.
     turn_urls: list[str] = Field(default_factory=list)  # e.g. ["turn:turn.example:3478"]
     turn_secret: str | None = None
-    turn_ttl: int = Field(default=86400, ge=60)  # seconds a credential is valid
+    # seconds a credential is valid; must exceed the longest session (coturn rejects the
+    # allocation refresh after expiry), a reconnect fetches fresh credentials
+    turn_ttl: int = Field(default=7200, ge=60)
     video_codecs: list[str] | None = None
     max_side: int = 960
     warmup_frames: int = Field(default=3, ge=0)  # dummy frames per worker before "ready"
 
     ws_queue_size: int = Field(default=64, ge=1)  # per-subscriber results buffer
     drain_timeout: float = 3.0  # seconds /stop waits for in-flight results
+
+    @model_validator(mode="after")
+    def _refuse_unsafe_secrets(self) -> "Settings":
+        """Refuse to start with TURN but no real shared secret, or with stand tokens required
+        but none (or placeholder ones) configured."""
+        if self.turn_urls and _placeholder(self.turn_secret):
+            raise ValueError("AIIRIS_TURN_URLS is set but AIIRIS_TURN_SECRET is empty or a "
+                             "placeholder; generate one with `openssl rand -hex 32` (and use "
+                             "the same value as coturn's TURN_SECRET)")
+        if self.require_token:
+            if not self.stand_tokens:
+                raise ValueError("AIIRIS_REQUIRE_TOKEN is on but AIIRIS_STAND_TOKENS is empty")
+            bad = sorted(k for k, v in self.stand_tokens.items() if _placeholder(v))
+            if bad:
+                raise ValueError(f"AIIRIS_STAND_TOKENS has empty/placeholder tokens for {bad}")
+        return self
 
     def ice_servers_now(self, user: str = "aiiris") -> list[dict]:
         """Static ``ice_servers`` plus TURN with fresh credentials (if configured)."""
@@ -76,6 +94,13 @@ class Settings(BaseSettings):
         cfg.append({"name": "yolo_classify", "params": {"weights": self.classify_weights}})
         cfg.append({"name": "anatomy"})
         return cfg
+
+
+PLACEHOLDER_SECRETS = {"change-me", "changeme", "change_me"}
+
+
+def _placeholder(value: str | None) -> bool:
+    return value is None or not value.strip() or value.strip().lower() in PLACEHOLDER_SECRETS
 
 
 def turn_credentials(secret: str, ttl: int, user: str, now: float | None = None

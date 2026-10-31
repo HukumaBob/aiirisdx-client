@@ -133,7 +133,7 @@ export interface FlowDeps {
   fetchTimeoutMs?: number
   /**
    * WebRTC configuration (ICE servers: STUN/TURN) for the send connection. Default: GET
-   * `${base}/client-config` (server-issued, TURN credentials are time-limited); any failure
+   * `${base}/client-config?stand=<stand>` with the stand token (server-issued, TURN credentials are time-limited); any failure
    * -> undefined (browser defaults, host candidates only -- fine inside the hospital LAN).
    */
   loadRtcConfig?: () => Promise<RTCConfiguration | undefined>
@@ -263,7 +263,10 @@ export class SessionFlow {
   private async rtcConfig(): Promise<RTCConfiguration | undefined> {
     if (this.deps.loadRtcConfig) return this.deps.loadRtcConfig().catch(() => undefined)
     try {
-      const r = await this.http('/client-config', { method: 'GET', timeoutMs: 5000 })
+      // the stand + its token (X-Stand-Token via http()) authorize this when the server
+      // requires tokens; TURN credentials are not given to anonymous callers
+      const stand = encodeURIComponent(this.params?.stand ?? '')
+      const r = await this.http(`/client-config?stand=${stand}`, { method: 'GET', timeoutMs: 5000 })
       const j = (await r.json()) as { ice_servers?: RTCIceServer[] }
       return Array.isArray(j?.ice_servers) && j.ice_servers.length ? { iceServers: j.ice_servers } : undefined
     } catch {

@@ -2,7 +2,7 @@
 /*
  * Headless-Chrome check of the stand page (src/station) against the running backend
  * (vite dev server proxying /api). Usage (playwright on NODE_PATH, see chrome-e2e.cjs):
- *   node scripts/station-e2e.cjs --url http://localhost:5173/ --chrome /usr/bin/google-chrome [--seconds 8] [--crop] [--save DIR] [--emr URL]
+ *   node scripts/station-e2e.cjs --url http://localhost:5173/ --chrome /usr/bin/google-chrome [--seconds 8] [--crop] [--save DIR] [--emr URL] [--token T]
  * Fake camera; adds a doctor, optionally draws a crop with the mouse, Start, waits, Stop,
  * prints the status line and the "finished" summary.
  * --accounting: also prints where the frames went -- capture counter ("отправлено"), the
@@ -45,6 +45,7 @@ for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) o[a[i].slice(2)] =
     await page.goto(o.url || 'http://localhost:5173/')
     await page.getByPlaceholder('stand-1').fill('stand-1')
     if (o.emr) await page.getByPlaceholder('https://emr.example/api/results').fill(String(o.emr))
+    if (o.token) await page.getByLabel('Токен стойки (если сервер требует)').fill(String(o.token))
     await page.getByPlaceholder('новый врач').fill('Тест')
     await page.getByRole('button', { name: 'Добавить' }).click()
     await page.waitForFunction(() => document.querySelector('video')?.videoWidth > 0)
@@ -90,8 +91,9 @@ for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) o[a[i].slice(2)] =
     out.containerStatus = await page.getByTestId('container-status').innerText()
     if (o.accounting && sessionId) {
       const base = new URL('/api', o.url || 'http://localhost:5173/').href
-      out.serverStatus = await (await fetch(`${base}/sessions/${sessionId}`)).json()
-      const lines = (await (await fetch(`${base}/sessions/${sessionId}/log`)).text()).split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      const h = o.token ? { 'X-Stand-Token': String(o.token) } : {}
+      out.serverStatus = await (await fetch(`${base}/sessions/${sessionId}`, { headers: h })).json()
+      const lines = (await (await fetch(`${base}/sessions/${sessionId}/log`, { headers: h })).text()).split('\n').filter(Boolean).map((l) => JSON.parse(l))
       const fr = lines.filter((l) => l.type === 'frame')
       const ids = fr.map((f) => f.frame_id)
       out.serverLog = { frameLines: fr.length, dropped: fr.filter((f) => f.dropped).length, minId: Math.min(...ids), maxId: Math.max(...ids), footer: lines.at(-1) }
