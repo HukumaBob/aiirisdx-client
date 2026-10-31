@@ -2,7 +2,7 @@
 /*
  * Headless-Chrome check of the stand page (src/station) against the running backend
  * (vite dev server proxying /api). Usage (playwright on NODE_PATH, see chrome-e2e.cjs):
- *   node scripts/station-e2e.cjs --url http://localhost:5173/ --chrome /usr/bin/google-chrome [--seconds 8] [--crop]
+ *   node scripts/station-e2e.cjs --url http://localhost:5173/ --chrome /usr/bin/google-chrome [--seconds 8] [--crop] [--save DIR] [--emr URL]
  * Fake camera; adds a doctor, optionally draws a crop with the mouse, Start, waits, Stop,
  * prints the status line and the "finished" summary.
  */
@@ -23,6 +23,7 @@ for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) o[a[i].slice(2)] =
     page.on('pageerror', (e) => process.stderr.write(`[pageerror] ${e}\n`))
     await page.goto(o.url || 'http://localhost:5173/')
     await page.getByPlaceholder('stand-1').fill('stand-1')
+    if (o.emr) await page.getByPlaceholder('https://emr.example/api/results').fill(String(o.emr))
     await page.getByPlaceholder('новый врач').fill('Тест')
     await page.getByRole('button', { name: 'Добавить' }).click()
     await page.waitForFunction(() => document.querySelector('video')?.videoWidth > 0)
@@ -49,6 +50,15 @@ for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) o[a[i].slice(2)] =
     await page.getByTestId('finished').waitFor({ timeout: 60000 })
     out.finished = await page.getByTestId('finished').innerText()
     out.state = await page.getByTestId('state').innerText()
+    await page.getByTestId('container-status').filter({ hasText: 'Контейнер' }).waitFor({ timeout: 60000 })
+    await page.waitForFunction(() => !document.querySelector('[data-testid=container-status]')?.textContent?.includes('сборка'), null, { timeout: 60000 })
+    out.containerStatus = await page.getByTestId('container-status').innerText()
+    if (o.save) {
+      const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Сохранить контейнер' }).click()])
+      const path = require('path').join(String(o.save), dl.suggestedFilename())
+      await dl.saveAs(path)
+      out.savedContainer = path
+    }
     console.log(JSON.stringify(out, null, 2))
   } finally {
     await browser.close()
