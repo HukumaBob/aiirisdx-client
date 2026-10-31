@@ -39,9 +39,17 @@ def warmed_pipeline(factory: Callable[[], Pipeline], frames: int, size: tuple[in
     return pipeline
 
 
+INSECURE_TOKEN_WARNING = (
+    "AIIRIS_REQUIRE_TOKEN is on but TLS is not configured (AIIRIS_TLS=false): stand tokens "
+    "(X-Stand-Token, ?token= of the results WebSocket) travel in CLEAR TEXT. Mount tls.crt/"
+    "tls.key for nginx (deploy/certs; plain HTTP then redirects to HTTPS) and set AIIRIS_TLS=true")
+
+
 def create_app(settings: Settings, pipeline_factory: Callable[[], Pipeline]) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if settings.require_token and not settings.tls:
+            log.warning(INSECURE_TOKEN_WARNING)
         models = pipeline_factory().model_versions()  # parent-side probe for log headers
         side = settings.max_side
         worker_factory = functools.partial(warmed_pipeline, pipeline_factory,
@@ -61,6 +69,21 @@ def create_app(settings: Settings, pipeline_factory: Callable[[], Pipeline]) -> 
 
     app = FastAPI(title="aiirisdx-client", lifespan=lifespan)
     app.state.settings = settings
+
+    if settings.require_token:
+        warned = False
+
+        @app.middleware("http")
+        async def _plain_http_token_check(request, call_next):
+            # a token-carrying request that reached nginx over plain HTTP: misconfiguration
+            nonlocal warned
+            if (not warned and request.headers.get("x-forwarded-proto") == "http"
+                    and request.headers.get("x-stand-token")):
+                warned = True
+                log.warning("a stand token arrived over plain HTTP (X-Forwarded-Proto: http); "
+                            "%s", INSECURE_TOKEN_WARNING)
+            return await call_next(request)
+
     app.include_router(sessions.router)
     app.include_router(results_ws.router)
     return app

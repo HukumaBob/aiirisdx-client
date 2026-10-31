@@ -57,7 +57,7 @@ then runs at a few fps -- for tests and file mode, not for live use).
   shipped `coturn.conf` denies relaying to every private range, and this is the one carve-out.
 * *Cloud*: set `AIIRIS_REQUIRE_TOKEN=true` and `AIIRIS_STAND_TOKENS={"stand-1": "<random>"}`;
   enter the token at the stand page ("Токен стойки", stored in the stand's browser). Enable
-  TLS. TURN is required: the backend container has only private addresses, and the stand is
+  TLS (below) and set `AIIRIS_TLS=true`. TURN is required: the backend container has only private addresses, and the stand is
   behind the hospital NAT. Leave `TURN_ALLOWED_PEER_IP` empty: coturn then relays only to
   public addresses (the backend allocates on the same TURN server, so the session runs
   relay-to-relay on the public `TURN_EXTERNAL_IP`), never into the VPC or the docker networks.
@@ -78,9 +78,20 @@ TURN URL delays every connection by the TURN timeout, ~5 s, measured). Set
 `TURN_EXTERNAL_IP` to the same address. Open `TURN_PORT` udp+tcp and the relay range in the
 firewall. Static STUN/TURN entries can be added with `AIIRIS_ICE_SERVERS` (JSON).
 
+> **WARNING: stand tokens without TLS travel in clear text.** With
+> `AIIRIS_REQUIRE_TOKEN=true` the stand token is sent on every request (`X-Stand-Token`) and
+> in the results WebSocket URL (`?token=`). Without certificates in `./certs` nginx serves
+> plain HTTP only and anyone on the path can read the token. Never run the cloud mode without
+> TLS. The backend logs a startup WARNING when `AIIRIS_REQUIRE_TOKEN=true` and
+> `AIIRIS_TLS` is not `true`, and once more if a token arrives over plain HTTP.
+
 **TLS.** Browsers allow camera / capture-card access (`getUserMedia`) only on HTTPS or
 `localhost`, so a stand that is not the server itself needs HTTPS. Put `tls.crt` + `tls.key`
-(full chain) into `./certs`; nginx then also serves 8443 (HSTS). A self-signed certificate for
+(full chain) into `./certs`; nginx then also serves 8443 (HSTS) and plain HTTP (8080) answers
+every request except the container health check `/nginx-health` with a `308` redirect to
+`https://<host>:${AIIRIS_HTTPS_PORT}` (`AIIRIS_HTTP_REDIRECT=0` keeps plain HTTP serving the
+site too; not recommended with tokens). Without certificates (on-prem, minimal `.env`) 8080
+serves the site as before. A self-signed certificate for
 a closed network: `openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout certs/tls.key
 -out certs/tls.crt -subj /CN=aiiris.local -addext subjectAltName=DNS:aiiris.local,IP:<server ip>`
 (install it as trusted on the stands). The nginx access log omits query strings, so the

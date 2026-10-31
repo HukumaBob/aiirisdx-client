@@ -78,6 +78,9 @@ services:
     environment:
       AIIRIS_SERVER_NAME: ${AIIRIS_SERVER_NAME:-_}
       AIIRIS_BACKEND_UPSTREAM: backend:8000
+      # with certs, plain HTTP redirects to https://<host>:<this port> (the published one)
+      AIIRIS_HTTPS_PUBLIC_PORT: ${AIIRIS_HTTPS_PORT:-8443}
+      AIIRIS_HTTP_REDIRECT: ${AIIRIS_HTTP_REDIRECT:-1}
     ports:
       - "${AIIRIS_HTTP_PORT:-8080}:8080"
       - "${AIIRIS_HTTPS_PORT:-8443}:8443"

@@ -494,3 +494,24 @@ def test_failed_file_validation_does_not_lock_the_session(client_factory, tmp_pa
     sid = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
     assert c.post(f"/sessions/{sid}/file", json={"path": "bad.mp4"}).status_code == 400
     assert c.post(f"/sessions/{sid}/offer", json={"sdp": "o", "type": "offer"}).status_code == 200
+
+
+# ---------------------------------------------------------------- I7: token without TLS
+def test_startup_warns_when_token_required_without_tls(tmp_path, caplog):
+    caplog.set_level("WARNING", logger="app.api.main")
+    s = make_settings(tmp_path, require_token=True, stand_tokens={"s1": "a-real-token-1"})
+    with TestClient(build_app(s, pool_factory=fast_pipeline)) as c:
+        assert any("CLEAR TEXT" in r.getMessage() for r in caplog.records)
+        caplog.clear()
+        c.get("/health", headers={"X-Forwarded-Proto": "http", "X-Stand-Token": "a-real-token-1"})
+        c.get("/health", headers={"X-Forwarded-Proto": "http", "X-Stand-Token": "a-real-token-1"})
+        assert sum("plain HTTP" in r.getMessage() for r in caplog.records) == 1  # once, no flood
+
+
+@pytest.mark.parametrize("kw", [dict(require_token=True, stand_tokens={"s1": "a-real-token-1"}, tls=True),
+                                dict(require_token=False)])
+def test_no_tls_warning_with_tls_or_without_tokens(tmp_path, caplog, kw):
+    caplog.set_level("WARNING", logger="app.api.main")
+    with TestClient(build_app(make_settings(tmp_path, **kw), pool_factory=fast_pipeline)):
+        pass
+    assert not any("CLEAR TEXT" in r.getMessage() for r in caplog.records)

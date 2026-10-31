@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AIIRIS_", extra="ignore")
 
     require_token: bool = False
+    # TLS is terminated in front of the backend (nginx with certs mounted). Only informs the
+    # startup check: require_token without TLS sends the stand tokens in clear text
+    tls: bool = False
     stand_tokens: dict[str, str] = Field(default_factory=dict)  # stand -> token
     sessions_dir: Path = Path("./sessions")
     file_root: Path | None = None  # allowed base dir for video-file mode; None = disabled

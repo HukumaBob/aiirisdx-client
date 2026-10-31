@@ -9,9 +9,13 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 
+# Plain HTTP (8080). What it serves is decided at container start by 40-aiiris-tls.sh, which
+# writes conf.d/aiiris-http.inc: with certificates mounted every request except the health
+# check is redirected (308) to HTTPS, so the stand token never travels in clear text; without
+# certificates (on-prem LAN, minimal env) it serves the full site.
 server {
     listen 8080;
     server_name ${AIIRIS_SERVER_NAME};
     set $aiiris_backend ${AIIRIS_BACKEND_UPSTREAM};
-    include /etc/nginx/aiiris/common.conf;
+    include /etc/nginx/conf.d/aiiris-http.inc;
 }
