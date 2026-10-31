@@ -25,7 +25,7 @@ export function metaOf(f: FinishedSession): ContainerMeta {
   if (f.recorderError && f.recorderError !== f.error) errors.push(`recorder: ${f.recorderError}`)
   return {
     sessionId: m.sessionId, stand: m.stand, startedAt: m.startedAt, doctor: m.doctor || null,
-    crop: m.crop, mimeType: f.mimeType, recordingStartOffset: f.recordingStartOffset, errors,
+    crop: m.crop, source: m.source ?? null, mimeType: f.mimeType, recordingStartOffset: f.recordingStartOffset, errors,
   }
 }
 

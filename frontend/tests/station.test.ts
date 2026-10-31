@@ -508,3 +508,13 @@ describe('profile bufferTimeoutMs (C1: configurable, next to bufferDelayMs)', ()
     expect('bufferTimeoutMs' in sanitizeProfile({})).toBe(false)
   })
 })
+
+describe('session meta carries the original capture size (I2)', () => {
+  it('source = capture width/height', async () => {
+    const t = setup()
+    const flow = new SessionFlow(t.deps)
+    await flow.start(params())
+    const fin = await flow.stop()
+    expect(fin.sessionMeta.source).toEqual({ width: 1920, height: 1080 })
+  })
+})

@@ -8,6 +8,9 @@ backend/.venv/bin/pytest -q
 cd frontend && npm install && npm test && npm run build
 ```
 
+Result container (video + frame table + log + manifest), the overlay math and the rule for
+joining the log to the video (by `frame_id` only): [docs/container-format.md](docs/container-format.md).
+
 ## Deployment
 
 Everything is in `deploy/`: `docker-compose.yml`, `Dockerfile.backend`,

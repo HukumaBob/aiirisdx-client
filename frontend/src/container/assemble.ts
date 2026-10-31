@@ -6,7 +6,9 @@
  *   frame_table.json   [{frameId, pts}] frame id -> pts in the recording timeline
  *   log.jsonl          server log (omitted when it could not be fetched)
  *   manifest.json      versioned description; NO patient data, only stand/time/uuid + the
- *                      doctor label (the single allowed free-form field)
+ *                      doctor label (the single allowed free-form field). `source` = the
+ *                      ORIGINAL capture frame size: bboxes in the log are normalized to it,
+ *                      while the video is the CROPPED region -- see docs/container-format.md
  *
  * The container is assembled even if the server was lost (RF2): `log.complete` says whether
  * the log is whole (derived by parsing it), and every problem goes to `errors`.
@@ -28,11 +30,29 @@ export interface ContainerMeta {
   /** free-form doctor label (not a patient identifier) or null */
   doctor: string | null
   crop: CropRect | null
+  /** ORIGINAL capture frame size (negotiated track settings); null if unknown */
+  source: { width: number; height: number } | null
   mimeType: string | null
   recordingStartOffset: number
   /** problems met so far (recorder error, /stop failure, ...) */
   errors: string[]
   createdAt?: string
+}
+
+/** manifest.json (docs/container-format.md) */
+export interface Manifest {
+  schema_version: string
+  container_version: string
+  session: { stand: string; started_at: string; uuid: string; session_id: string }
+  doctor: string | null
+  /** ORIGINAL-frame pixels; the video holds exactly this region (null = whole frame) */
+  crop: CropRect | null
+  /** ORIGINAL capture frame size the log's normalized bboxes refer to; null if unknown */
+  source: { width: number; height: number } | null
+  video: { file: string; mimeType: string; recording_start_offset: number; frame_count: number; frames_without_pts: number[] }
+  log: { file: string | null; complete: boolean; frames: number | null }
+  errors: string[]
+  created_at: string
 }
 
 const SAFE = /[^A-Za-z0-9-]/g
@@ -87,12 +107,13 @@ export async function assembleContainer(
   else if (!parsed.complete) errors.push('log incomplete: no valid closing footer (server lost mid-session or log truncated)')
   if (without.length) errors.push(`frame_table_missing: [${without.join(', ')}]`)
 
-  const manifest = {
+  const manifest: Manifest = {
     schema_version: MANIFEST_SCHEMA_VERSION,
     container_version: CONTAINER_VERSION,
     session: { stand: meta.stand, started_at: meta.startedAt, uuid: sp.uuid, session_id: sp.id },
     doctor: meta.doctor,
     crop: meta.crop,
+    source: meta.source ?? null,
     video: {
       file: videoFile,
       mimeType: meta.mimeType ?? video.type,

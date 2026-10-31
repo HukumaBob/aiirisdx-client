@@ -16,7 +16,7 @@ const goodLog = [header, frame(0), frame(1), frame(2), footer(true, 3)].join('\n
 
 const meta = (over: Partial<ContainerMeta> = {}): ContainerMeta => ({
   sessionId: 's1_20261030T100000_u-1', stand: 's1', startedAt: '2026-10-30T10:00:00', doctor: 'Иванов',
-  crop: null, mimeType: 'video/mp4;codecs=avc1', recordingStartOffset: 0.5, errors: [], ...over,
+  crop: null, source: { width: 1920, height: 1080 }, mimeType: 'video/mp4;codecs=avc1', recordingStartOffset: 0.5, errors: [], ...over,
 })
 const table = (ids: number[]) => ids.map((frameId) => ({ frameId, pts: frameId / 30 }))
 const video = () => new Blob([new Uint8Array(1000).map((_, i) => i % 251)], { type: 'video/mp4' })
@@ -100,11 +100,21 @@ describe('test_manifest_marks_incomplete_log', () => {
     expect(m).toMatchObject({
       schema_version: '1.0', container_version: '1',
       session: { stand: 's1', started_at: '2026-10-30T10:00:00', uuid: 'u-1', session_id: 's1_20261030T100000_u-1' },
-      doctor: 'Иванов', crop: null,
+      doctor: 'Иванов', crop: null, source: { width: 1920, height: 1080 },
       video: { file: 'video.mp4', mimeType: 'video/mp4;codecs=avc1', recording_start_offset: 0.5, frame_count: 3, frames_without_pts: [] },
       log: { file: 'log.jsonl', complete: true, frames: 3 }, errors: [],
     })
     expect(typeof m.created_at).toBe('string')
+  })
+})
+
+describe('manifest source size (I2)', () => {
+  it('records the ORIGINAL capture size next to the crop; unknown -> null', async () => {
+    const m = await manifestOf(await assembleContainer(video(), table([0]), goodLog, meta({ crop: { x: 420, y: 0, w: 1080, h: 1080 } })))
+    expect(m.source).toEqual({ width: 1920, height: 1080 })
+    expect(m.crop).toEqual({ x: 420, y: 0, w: 1080, h: 1080 })
+    const m2 = await manifestOf(await assembleContainer(video(), table([0]), goodLog, meta({ source: null })))
+    expect(m2.source).toBeNull()
   })
 })
 
@@ -134,7 +144,7 @@ describe('test_no_patient_fields', () => {
     expect(keys.length).toBeGreaterThan(10)
     const bad = /patient|birth|dob|mrn|ssn|snils|polis|passport|address|phone|fio|surname|first_?name|last_?name|^name$|gender|sex|age/i
     expect(keys.filter((k) => bad.test(k))).toEqual([])
-    expect(Object.keys(m).sort()).toEqual(['container_version', 'created_at', 'crop', 'doctor', 'errors', 'log', 'schema_version', 'session', 'video'])
+    expect(Object.keys(m).sort()).toEqual(['container_version', 'created_at', 'crop', 'doctor', 'errors', 'log', 'schema_version', 'session', 'source', 'video'])
   })
 })
 

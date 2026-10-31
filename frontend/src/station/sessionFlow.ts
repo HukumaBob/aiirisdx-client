@@ -72,6 +72,9 @@ export interface SessionMeta {
   doctor: string
   mode: 'live' | 'file'
   crop: CropRect | null
+  /** ORIGINAL capture frame size (negotiated), the frame the crop and the log's normalized
+   * bboxes refer to; null in file mode / if unknown */
+  source?: { width: number; height: number } | null
   startedAt: string
   stoppedAt: string
   /** frames stamped by the capture (see FlowStatus.sent; not all are transmitted) */
@@ -568,6 +571,7 @@ export class SessionFlow {
         doctor: p.doctor,
         mode: p.mode,
         crop: p.crop ?? null,
+        source: cap && cap.width > 0 && cap.height > 0 ? { width: cap.width, height: cap.height } : null,
         startedAt: this.startedAt,
         stoppedAt: new Date().toISOString(),
         framesSent,
