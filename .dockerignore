@@ -1,0 +1,15 @@
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/dist
+**/*.egg-info
+.git
+.superpowers
+sessions
+deploy/weights
+deploy/media
+deploy/.env
+frontend/test-results
+*.mp4
+*.pt

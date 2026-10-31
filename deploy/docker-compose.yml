@@ -1,0 +1,121 @@
+# aiirisdx-client deployment. Run from deploy/:
+#   cp .env.example .env    # edit
+#   docker compose --profile gpu up -d --build     # NVIDIA GPU (default in .env.example)
+#   docker compose --profile cpu up -d --build     # machine without a GPU
+# Services: backend (FastAPI + inference pool), frontend (nginx: stand page + /api proxy),
+# coturn (TURN). No redis: the backend keeps all state in-process and on the sessions volume.
+# See README.md "Deployment".
+
+name: ${COMPOSE_PROJECT_NAME:-aiirisdx}
+
+x-backend: &backend
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    AIIRIS_SESSIONS_DIR: /data/sessions
+    AIIRIS_FILE_ROOT: /media
+    # Ultralytics must never download or pip-install anything at runtime (offline sites)
+    YOLO_OFFLINE: "1"
+    YOLO_AUTOINSTALL: "false"
+  volumes:
+    - ${AIIRIS_WEIGHTS_DIR:-./weights}:/weights:ro
+    - ${AIIRIS_MEDIA_DIR:-./media}:/media:ro
+    - sessions:/data/sessions
+  expose:
+    - "8000"
+  ports:
+    # optional direct access to the API (diagnostics); bound to localhost only
+    - "127.0.0.1:${AIIRIS_BACKEND_PORT:-18000}:8000"
+  healthcheck:
+    test: ["CMD", "python", "-c", "import json,sys,urllib.request; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)).get('ready') else 1)"]
+    interval: 15s
+    timeout: 5s
+    start_period: 120s
+    retries: 4
+  stop_grace_period: 30s  # /stop drain + closing logs with complete=false on shutdown
+
+services:
+  backend:
+    <<: *backend
+    profiles: ["gpu"]
+    image: aiirisdx-backend:gpu
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+      args:
+        TORCH_INDEX: ${TORCH_INDEX:-https://download.pytorch.org/whl/cu126}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${AIIRIS_GPU_COUNT:-1}
+              capabilities: [gpu]
+    networks:
+      default:
+        aliases: [backend]
+
+  backend-cpu:
+    <<: *backend
+    profiles: ["cpu"]
+    image: aiirisdx-backend:cpu
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+      args:
+        TORCH_INDEX: https://download.pytorch.org/whl/cpu
+    networks:
+      default:
+        aliases: [backend]
+
+  frontend:
+    image: aiirisdx-frontend:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    restart: unless-stopped
+    environment:
+      AIIRIS_SERVER_NAME: ${AIIRIS_SERVER_NAME:-_}
+      AIIRIS_BACKEND_UPSTREAM: backend:8000
+    ports:
+      - "${AIIRIS_HTTP_PORT:-8080}:8080"
+      - "${AIIRIS_HTTPS_PORT:-8443}:8443"
+    volumes:
+      # optional TLS: tls.crt + tls.key in this directory enable HTTPS on 8443
+      - ${AIIRIS_CERTS_DIR:-./certs}:/etc/nginx/certs:ro
+    depends_on:
+      backend:
+        condition: service_started
+        required: false
+      backend-cpu:
+        condition: service_started
+        required: false
+
+  coturn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    profiles: ["gpu", "cpu", "turn"]
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET:?set TURN_SECRET in .env (same as AIIRIS_TURN_SECRET)}
+      - --realm=${TURN_REALM:-aiirisdx}
+      - --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
+      - --listening-port=${TURN_PORT:-3478}
+      - --min-port=${TURN_MIN_PORT:-49160}
+      - --max-port=${TURN_MAX_PORT:-49200}
+    volumes:
+      - ./coturn.conf:/etc/coturn/turnserver.conf:ro
+    ports:
+      - "${TURN_PORT:-3478}:${TURN_PORT:-3478}/udp"
+      - "${TURN_PORT:-3478}:${TURN_PORT:-3478}/tcp"
+      - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}:${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}/udp"
+    healthcheck:
+      # turnutils_stunclient ships with the image; a STUN binding answer = TURN listener up
+      test: ["CMD-SHELL", "turnutils_stunclient -p ${TURN_PORT:-3478} 127.0.0.1 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  sessions:

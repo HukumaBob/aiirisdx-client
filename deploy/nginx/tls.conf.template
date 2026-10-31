@@ -1,0 +1,13 @@
+# Rendered by 40-aiiris-tls.sh only if /etc/nginx/certs/tls.crt and tls.key are mounted.
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name ${AIIRIS_SERVER_NAME};
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:aiiris_tls:10m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    set $aiiris_backend ${AIIRIS_BACKEND_UPSTREAM};
+    include /etc/nginx/aiiris/common.conf;
+}

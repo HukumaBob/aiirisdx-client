@@ -1,0 +1,17 @@
+# Rendered by the nginx image entrypoint (envsubst, only ${AIIRIS_*}) into conf.d/default.conf.
+# Access log without the query string: the results WebSocket carries the stand token as
+# ?token= (browsers cannot set WebSocket headers), so $request would leak it into the log.
+log_format aiiris '$remote_addr [$time_local] "$request_method $uri" $status $body_bytes_sent '
+                  '$request_time "$http_user_agent"';
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 8080;
+    server_name ${AIIRIS_SERVER_NAME};
+    set $aiiris_backend ${AIIRIS_BACKEND_UPSTREAM};
+    include /etc/nginx/aiiris/common.conf;
+}

@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1
+# Backend image: Python 3.12 slim + PyTorch wheels from the PyTorch index.
+#
+# CUDA strategy: the CUDA runtime (cuDNN, cuBLAS, ...) ships inside the torch wheel
+# (TORCH_INDEX .../cu126 -> CUDA 12.6), so the base image needs no CUDA toolkit; only the
+# host NVIDIA driver (>= 560, CUDA 12.6 capable) and the NVIDIA Container Toolkit are needed.
+# CPU-only image: --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu
+# (about 1 GB instead of ~7 GB; used by the compose profile "cpu").
+#
+# PyAV, aiortc and opencv-python-headless wheels bundle their own ffmpeg/libav, libvpx,
+# opus and libsrtp; no system ffmpeg is installed.
+#
+# Offline build: either a warm BuildKit pip cache (the RUN --mount=type=cache below), or a
+# wheelhouse: put every wheel into deploy/wheels/ (see README "Offline") -- if that directory
+# contains wheels, pip runs with --no-index against it and never touches the network.
+# Build context: the repository root (docker compose sets it).
+
+FROM python:3.12-slim
+
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu126
+ARG TORCH_VERSION=2.14.1
+ARG TORCHVISION_VERSION=0.29.1
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    # Ultralytics: never go online, never pip-install at runtime, writable settings dir
+    YOLO_OFFLINE=1 \
+    YOLO_AUTOINSTALL=false \
+    YOLO_CONFIG_DIR=/tmp/ultralytics \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    AIIRIS_SESSIONS_DIR=/data/sessions
+
+COPY deploy/requirements.txt /tmp/requirements.txt
+
+# the wheelhouse is bind-mounted for this step only (it never ends up in an image layer)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,source=deploy/wheels,target=/wheels \
+    set -eu; \
+    if ls /wheels/*.whl >/dev/null 2>&1; then \
+        echo "using the offline wheelhouse"; \
+        TORCH_SRC="--no-index --find-links /wheels"; REQ_SRC="--no-index --find-links /wheels"; \
+    else \
+        TORCH_SRC="--index-url ${TORCH_INDEX}"; REQ_SRC=""; \
+    fi; \
+    pip install $TORCH_SRC "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}"; \
+    pip install $REQ_SRC --no-deps -r /tmp/requirements.txt
+
+# the app runs from source (PYTHONPATH), so package data such as anatomy_rules.yaml is there
+WORKDIR /app
+ENV PYTHONPATH=/app
+COPY backend/app ./app
+RUN python -c "import app.api.main, app.pipeline.stages, av, aiortc, cv2, torch, ultralytics; print('torch', torch.__version__)"
+
+RUN useradd --system --uid 10001 --create-home aiiris \
+    && mkdir -p /data/sessions /weights /media \
+    && chown -R aiiris:aiiris /data
+USER aiiris
+
+EXPOSE 8000
+VOLUME ["/data/sessions"]
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=4 \
+    CMD python -c "import json,sys,urllib.request; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)).get('ready') else 1)"
+
+CMD ["uvicorn", "app.api.main:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
