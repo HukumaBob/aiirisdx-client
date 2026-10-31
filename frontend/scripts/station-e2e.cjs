@@ -39,6 +39,11 @@ for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) o[a[i].slice(2)] =
     await page.getByRole('button', { name: 'Старт' }).click()
     await page.waitForFunction(() => document.querySelector('[data-testid=state]')?.textContent === 'идёт сеанс', null, { timeout: 20000 })
     await page.waitForTimeout(Number(o.seconds || 8) * 1000)
+    const t0 = await page.evaluate(() => { const v = document.querySelector('video'); return { paused: v.paused, t: v.currentTime } })
+    await page.waitForTimeout(1500)
+    const t1 = await page.evaluate(() => { const v = document.querySelector('video'); return { paused: v.paused, t: v.currentTime } })
+    out.previewPlaying = !t1.paused && t1.t > t0.t
+    out.previewTimes = [t0.t, t1.t]
     out.runningStatus = await page.getByTestId('statusline').innerText()
     await page.getByRole('button', { name: 'Стоп' }).click()
     await page.getByTestId('finished').waitFor({ timeout: 60000 })

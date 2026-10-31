@@ -63,6 +63,8 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       }),
     [], // eslint-disable-line react-hooks/exhaustive-deps
   )
+  // the live capture's source (set as soon as the capture exists, also when the server is lost)
+  const captureStream = flow.capture?.sourceStream ?? null
   const active = ['starting', 'running', 'server-lost', 'stopping'].includes(status.state)
 
   // poll counters while a session is on
@@ -99,7 +101,9 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
     if (!v) return
     if (active) {
       stopPreview()
-      v.srcObject = flow.capture?.sourceStream ?? null
+      // changing srcObject resets paused=true: play() again (also autoPlay on the element)
+      v.srcObject = captureStream
+      if (captureStream) void v.play?.()?.catch?.(() => {})
       return
     }
     if (mode !== 'live' || !navigator.mediaDevices?.getUserMedia) {
@@ -122,7 +126,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       cancelled = true
       stopPreview()
     }
-  }, [active, mode, deviceId, flow, stopPreview, refreshDevices, status.state === 'running'])
+  }, [active, mode, deviceId, flow, stopPreview, refreshDevices, captureStream])
 
   // ---- doctor / profile
   const chooseDoctor = (name: string) => {
@@ -193,7 +197,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       <div className="grid">
         <section className="video">
           <div className="stage">
-            <video ref={videoRef} muted playsInline onLoadedMetadata={(e) => setFrameSize({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })} />
+            <video ref={videoRef} muted playsInline autoPlay onLoadedMetadata={(e) => setFrameSize({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })} />
             {cropOn && mode === 'live' && (
               <CropEditor frameW={frameSize.w} frameH={frameSize.h} crop={crop} onChange={setCrop} disabled={active} onError={setCropError} />
             )}
