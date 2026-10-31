@@ -11,6 +11,35 @@ cd frontend && npm install && npm test && npm run build
 Result container (video + frame table + log + manifest), the overlay math and the rule for
 joining the log to the video (by `frame_id` only): [docs/container-format.md](docs/container-format.md).
 
+## Tests
+
+```
+backend/.venv/bin/pytest -q                 # from the repo root (pytest.ini: pythonpath=backend)
+cd frontend && npx vitest run && npx tsc -b # unit tests + type check (npm run build also builds)
+```
+
+Prerequisites and what needs external assets:
+
+* Backend: the venv from above (`pip install -e backend` brings FastAPI, aiortc, PyAV,
+  OpenCV, numpy, ultralytics (+ torch), pytest, pytest-asyncio). Tests spawn worker processes (multiprocessing *spawn*);
+  no GPU needed -- all pool/API tests use fast fake pipelines.
+* `tests/test_frame_id.py`: the H.264 bitrate gate tests use PyAV via `pytest.importorskip("av")`
+  (skipped without it; PyAV is a regular dependency, so normally it runs).
+* `tests/test_stages.py`: tests marked `needs_weights` run real YOLO detection and are
+  **skipped** unless detector weights exist at `TEST_DETECTOR_WEIGHTS` (default: the
+  prototype's `test000.pt` path). The format/geometry logic is also covered with fake models.
+* `tests/e2e/test_file_mode_e2e.py`: the in-process variant always runs; the variant against
+  a running deployment is skipped unless `AIIRIS_E2E_BASE_URL` (e.g.
+  `http://localhost:18080/api`) and `AIIRIS_E2E_MEDIA_DIR` (host directory mounted as the
+  backend's `AIIRIS_FILE_ROOT`) are set; add `AIIRIS_E2E_TOKEN` / `AIIRIS_E2E_STAND` when the
+  stack requires a stand token.
+* Frontend: Node 20 + `npm install`. `frontend/tests/assemble.test.ts` verifies the ZIP with an
+  independent reader and needs **`python3` on PATH** (standard library only).
+* Not part of the suites (manual / browser): `frontend/scripts/chrome-e2e.cjs` and
+  `frontend/scripts/station-e2e.cjs` drive headless Chrome with a fake camera against a
+  running backend (playwright on `NODE_PATH`, see the script headers); `tests/load/`
+  (streams-per-GPU measurement, `tests/load/README.md`).
+
 ## Deployment
 
 Everything is in `deploy/`: `docker-compose.yml`, `Dockerfile.backend`,
