@@ -205,7 +205,10 @@ def test_ws_disconnect_does_not_kill_router(client_factory, tmp_path):
     with c.websocket_connect(f"/sessions/{sid}/results") as ws:
         c.post(f"/sessions/{sid}/file", json={"path": "v.mp4", "realtime": False})
         ws.receive_json()
-    # subscriber gone; logging must continue and stop must still complete the log
+    # subscriber gone; logging must continue and stop must still complete the log.
+    # Wait for the file to be fully ingested first: /stop cancels the file ingest, so under
+    # load an immediate /stop raced it and logged 9 of 10 frames (flaky in full-suite runs)
+    _wait_file_done(c, sid, 10)
     r = c.post(f"/sessions/{sid}/stop")
     assert r.json()["frames"] == 10
 
@@ -426,3 +429,68 @@ def test_health_ready_has_no_reason(client_factory):
         assert time.monotonic() < deadline
         time.sleep(0.05)
     assert j["healthy"] is True and j["failed_workers"] == [] and j["reason"] is None
+
+
+# ---------------------------------------------------------------- I6: one ingest kind per session
+def _fake_offers(c):
+    calls = []
+
+    async def handle_offer(sdp, key, crop=None):
+        calls.append(sdp)
+        return "ANSWER"
+
+    c.app.state.core.ingest.handle_offer = handle_offer
+    return calls
+
+
+def _wait_file_done(c, sid, n, timeout=20.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while True:
+        st = c.get(f"/sessions/{sid}").json()
+        if st["file"] == "done" and st["logged"] == st["submitted"] == n:
+            return
+        assert time.monotonic() < deadline, st
+        time.sleep(0.05)
+
+
+def test_second_file_in_one_session_rejected(client_factory, tmp_path):
+    c = client_factory()
+    sid = _run_file(c, tmp_path, 5)
+    assert c.post(f"/sessions/{sid}/file", json={"path": "v.mp4", "realtime": False}).status_code == 200
+    _wait_file_done(c, sid, 5)
+    r = c.post(f"/sessions/{sid}/file", json={"path": "v.mp4", "realtime": False})
+    assert r.status_code == 409 and "new session" in r.json()["detail"]
+    assert c.post(f"/sessions/{sid}/stop").json()["frames"] == 5
+    _, recs, _ = read_log(Path(c.app.state.settings.sessions_dir) / sid / "log.jsonl")
+    ids = [x.frame_id for x in recs]
+    assert ids == list(range(5)) and len(set(ids)) == len(ids)
+
+
+def test_file_after_offer_and_offer_after_file_rejected(client_factory, tmp_path):
+    c = client_factory()
+    calls = _fake_offers(c)
+    write_video(tmp_path / "media" / "v.mp4", 3)
+    live = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
+    assert c.post(f"/sessions/{live}/offer", json={"sdp": "o1", "type": "offer"}).status_code == 200
+    r = c.post(f"/sessions/{live}/file", json={"path": "v.mp4", "realtime": False})
+    assert r.status_code == 409 and "WebRTC" in r.json()["detail"]
+    # re-offer (reconnect) within the same live session stays allowed
+    assert c.post(f"/sessions/{live}/offer", json={"sdp": "o2", "type": "offer"}).status_code == 200
+    assert calls == ["o1", "o2"]
+
+    f = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
+    assert c.post(f"/sessions/{f}/file", json={"path": "v.mp4", "realtime": False}).status_code == 200
+    r = c.post(f"/sessions/{f}/offer", json={"sdp": "o3", "type": "offer"})
+    assert r.status_code == 409 and "file" in r.json()["detail"]
+    assert calls == ["o1", "o2"]
+
+
+def test_failed_file_validation_does_not_lock_the_session(client_factory, tmp_path):
+    c = client_factory()
+    _fake_offers(c)
+    (tmp_path / "media" / "bad.mp4").write_bytes(b"not a video")
+    sid = c.post("/sessions", json={"stand": "s1"}).json()["session_id"]
+    assert c.post(f"/sessions/{sid}/file", json={"path": "bad.mp4"}).status_code == 400
+    assert c.post(f"/sessions/{sid}/offer", json={"sdp": "o", "type": "offer"}).status_code == 200
