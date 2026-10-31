@@ -64,6 +64,23 @@ export function drawBoxes(ctx: CanvasRenderingContext2D, dets: DetectionMsg[], w
   ctx.restore()
 }
 
+/**
+ * Crop (ORIGINAL capture pixels) -> pixels of a canvas showing the whole frame at another
+ * size (the secondary screen gets bitmaps downscaled to 960 px, R9). Without `source` the
+ * crop is assumed to be in canvas pixels already.
+ */
+export function cropToCanvas(
+  crop: { x: number; y: number; w: number; h: number },
+  source: { width: number; height: number } | null | undefined,
+  canvasW: number,
+  canvasH: number,
+) {
+  if (!source?.width || !source?.height) return { ...crop }
+  const sx = canvasW / source.width
+  const sy = canvasH / source.height
+  return { x: crop.x * sx, y: crop.y * sy, w: crop.w * sx, h: crop.h * sy }
+}
+
 export function drawCropOutline(
   ctx: CanvasRenderingContext2D,
   crop: { x: number; y: number; w: number; h: number },

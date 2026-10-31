@@ -59,3 +59,29 @@ describe('ResultsClient', () => {
     expect(FakeWS.all).toHaveLength(1)
   })
 })
+
+describe('crop outline on the downscaled secondary canvas (I1)', () => {
+  it('cropToCanvas scales ORIGINAL pixels to the canvas size', async () => {
+    const { cropToCanvas } = await import('../src/secondary/boxRenderer')
+    // 1080p capture shown on a 960x540 canvas
+    expect(cropToCanvas({ x: 420, y: 0, w: 1080, h: 1080 }, { width: 1920, height: 1080 }, 960, 540)).toEqual({ x: 210, y: 0, w: 540, h: 540 })
+    expect(cropToCanvas({ x: 1, y: 2, w: 3, h: 4 }, null, 960, 540)).toEqual({ x: 1, y: 2, w: 3, h: 4 })
+  })
+  it('SecondaryScreen strokes the outline inside the 960-px canvas for a 1080p crop', async () => {
+    const React = await import('react')
+    const { render, act } = await import('@testing-library/react')
+    const { SecondaryScreen } = await import('../src/secondary/SecondaryScreen')
+    const strokeRect = vi.fn()
+    const ctx = { drawImage: vi.fn(), save: vi.fn(), restore: vi.fn(), setLineDash: vi.fn(), strokeRect, beginPath: vi.fn(), stroke: vi.fn() }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as never)
+    let cb: ((f: { frameId: number; bitmap: unknown; tMs: number }, r: null) => void) | undefined
+    const buffer = { onReady: (f: typeof cb) => ((cb = f), () => {}) }
+    render(React.createElement(SecondaryScreen, {
+      buffer: buffer as never, profile: { alertThreshold: 0.5, soundEnabled: false, bufferDelayMs: 1000 },
+      crop: { x: 420, y: 0, w: 1080, h: 1080 }, sourceSize: { width: 1920, height: 1080 }, beep: () => {},
+    }))
+    act(() => cb!({ frameId: 1, bitmap: { width: 960, height: 540 }, tMs: 0 }, null))
+    expect(strokeRect).toHaveBeenCalledWith(210, 0, 540, 540)
+    vi.restoreAllMocks()
+  })
+})

@@ -7,13 +7,14 @@
  * (openSecondaryWindow); the opener draws into the popup's canvas through a React portal.
  * If popups are blocked (or the popup is closed) the screen renders in-page instead.
  * The frame is the UNSTAMPED original (captureSource.onFrameBitmap), so normalized boxes map
- * 1:1 to canvas pixels; a session crop is only outlined.
+ * 1:1 to canvas pixels; a session crop is only outlined (scaled from original-frame pixels
+ * to the downscaled canvas via `sourceSize`).
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { AlignmentBuffer } from '../sync/alignmentBuffer'
 import { AlertController, webAudioBeep, type AlertState, type DoctorProfile } from './alertLogic'
-import { drawBoxes, drawCropOutline } from './boxRenderer'
+import { cropToCanvas, drawBoxes, drawCropOutline } from './boxRenderer'
 import { alertBorder, FindingsAlert } from './FindingsAlert'
 
 export interface SecondaryScreenProps {
@@ -21,6 +22,9 @@ export interface SecondaryScreenProps {
   profile: DoctorProfile
   /** crop in ORIGINAL frame pixels (outline only) */
   crop?: { x: number; y: number; w: number; h: number } | null
+  /** size of the ORIGINAL capture frame the crop refers to; the canvas shows the frame
+   * downscaled (R9), so the outline is scaled by canvas/source. Omitted = crop in canvas px */
+  sourceSize?: { width: number; height: number } | null
   /** popup window to render into; null/closed = in-page */
   win?: Window | null
   beep?: () => void
@@ -37,12 +41,14 @@ export function openSecondaryWindow(): Window | null {
   return w
 }
 
-export function SecondaryScreen({ buffer, profile, crop, win, beep }: SecondaryScreenProps) {
+export function SecondaryScreen({ buffer, profile, crop, sourceSize, win, beep }: SecondaryScreenProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [alert, setAlert] = useState<AlertState>(IDLE)
   const ctl = useMemo(() => new AlertController(profile, { beep: beep ?? webAudioBeep() }), []) // eslint-disable-line react-hooks/exhaustive-deps
   const cropRef = useRef(crop)
   cropRef.current = crop
+  const sourceRef = useRef(sourceSize)
+  sourceRef.current = sourceSize
   const usable = win && !win.closed ? win : null
 
   useEffect(() => ctl.setProfile(profile), [ctl, profile])
@@ -61,7 +67,7 @@ export function SecondaryScreen({ buffer, profile, crop, win, beep }: SecondaryS
         }
         ctx.drawImage(frame.bitmap as CanvasImageSource, 0, 0, w, h)
         if (result) drawBoxes(ctx, result.detections, w, h)
-        if (cropRef.current) drawCropOutline(ctx, cropRef.current)
+        if (cropRef.current) drawCropOutline(ctx, cropToCanvas(cropRef.current, sourceRef.current, w, h))
       }
       const next = ctl.update(result)
       setAlert((p) =>

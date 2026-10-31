@@ -206,7 +206,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   const reconnect = () => flow.reconnect().then(() => setStatus(flow.getStatus()), (e) => setError(String(e)))
 
   const secondary = flow.buffer && active ? (
-    <SecondaryScreen buffer={flow.buffer} profile={profile} crop={cropOn ? crop : null} win={win} />
+    <SecondaryScreen buffer={flow.buffer} profile={profile} crop={cropOn ? crop : null} sourceSize={flow.capture ? { width: flow.capture.width, height: flow.capture.height } : null} win={win} />
   ) : null
 
   return (
