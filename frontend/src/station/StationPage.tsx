@@ -62,7 +62,6 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   emrUrlRef.current = emrUrl
   const [outcome, setOutcome] = useState<ContainerOutcome | null>(null)
   const [win, setWin] = useState<Window | null>(null)
-  const [showInPage, setShowInPage] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const previewRef = useRef<MediaStream | null>(null)
 
@@ -200,8 +199,6 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
     if (!check.ok) return setError(`Укажите: ${check.reasons.map((r) => REASON_RU[r]).join(', ')}`)
     if (mode === 'live' && liveSource === 'local' && !localFile) return setError('Выберите видеофайл')
     stopPreview()
-    // the secondary screen popup must be opened from the click
-    if (!showInPage && (!win || win.closed)) setWin(openSecondaryWindow())
     try {
       let sourceStream: MediaStream | undefined
       if (mode === 'live' && liveSource === 'local' && localFile) {
@@ -250,8 +247,12 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   }
   const reconnect = () => flow.reconnect().then(() => setStatus(flow.getStatus()), (e) => setError(String(e)))
 
-  const secondary = flow.buffer && active ? (
-    <SecondaryScreen buffer={flow.buffer} profile={profile} crop={cropOn ? crop : null} sourceSize={flow.capture ? { width: flow.capture.width, height: flow.capture.height } : null} win={showInPage ? null : win} />
+  // This unit has ONE screen: the stand's own monitor gets the endoscope signal directly, so
+  // here the delayed frame with its boxes replaces the live preview while a session runs. It can
+  // optionally be moved to a window on another monitor.
+  const popup = !!win && !win.closed
+  const aux = flow.buffer && active ? (
+    <SecondaryScreen buffer={flow.buffer} profile={profile} crop={cropOn ? crop : null} sourceSize={flow.capture ? { width: flow.capture.width, height: flow.capture.height } : null} win={popup ? win : null} />
   ) : null
 
   return (
@@ -264,10 +265,11 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       <div className="grid">
         <section className="video">
           <div className="stage">
-            <video ref={videoRef} muted playsInline autoPlay onLoadedMetadata={(e) => setFrameSize({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })} />
-            {cropOn && mode === 'live' && (
+            <video ref={videoRef} className={aux ? 'hidden' : undefined} muted playsInline autoPlay onLoadedMetadata={(e) => setFrameSize({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })} />
+            {cropOn && mode === 'live' && !aux && (
               <CropEditor frameW={frameSize.w} frameH={frameSize.h} crop={crop} onChange={setCrop} disabled={active} onError={setCropError} />
             )}
+            {aux && <div className="aux" data-testid="aux-screen">{popup ? <div className="aux-note">Экран с рамками открыт в отдельном окне</div> : null}{aux}</div>}
           </div>
           {mode === 'live' && (
             <div className="statusline" data-testid="negotiated">
@@ -308,7 +310,6 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
               )}
             </div>
           )}
-          {showInPage && secondary}
         </section>
 
         <aside className="controls">
@@ -414,10 +415,12 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
             {status.state === 'server-lost' && mode === 'live' && <button type="button" onClick={reconnect}>Переподключить</button>}
           </div>
           <div className="row">
-            <button type="button" onClick={() => setWin(openSecondaryWindow())}>Вторичный экран (окно)</button>
-            <label className="inline"><input type="checkbox" checked={showInPage} onChange={(e) => setShowInPage(e.target.checked)} /> на этой странице</label>
+            {popup ? (
+              <button type="button" onClick={() => { win?.close(); setWin(null) }}>Вернуть экран на эту страницу</button>
+            ) : (
+              <button type="button" onClick={() => setWin(openSecondaryWindow())} title="вынести экран с рамками на другой монитор">Вынести на другой монитор</button>
+            )}
           </div>
-          {!showInPage && secondary}
         </aside>
       </div>
     </div>

@@ -47,3 +47,7 @@
 .station .row { flex-wrap: wrap; }
 .station .row > input:not([type='checkbox']), .station .row > select { flex: 1 1 8em; min-width: 0; }
 .station .controls select, .station .controls input:not([type]), .station .controls input[type='text'], .station .controls input[type='number'], .station .controls input[type='password'] { width: 100%; }
+.station .stage video.hidden { display: none; }
+.station .stage .aux { position: absolute; inset: 0; background: #000; }
+.station .stage .aux > div { width: 100%; height: 100%; }
+.station .stage .aux .aux-note { display: flex; align-items: center; justify-content: center; color: var(--text-light); }
