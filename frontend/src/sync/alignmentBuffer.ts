@@ -32,6 +32,8 @@ export interface DetectionMsg {
   bbox: [number, number, number, number] // xywh, normalized 0..1 of the ORIGINAL frame
   class_name: string
   confidence: number // 0..1
+  /** segmentation only: outline points, normalized 0..1 of the ORIGINAL frame, implicitly closed */
+  polygon?: [number, number][] | null
 }
 
 export interface FrameResult {

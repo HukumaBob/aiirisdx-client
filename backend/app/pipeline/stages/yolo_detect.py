@@ -20,6 +20,7 @@ def _np(t):
 class YoloDetectStage:
     name = "yolo_detect"
     kind = "detector"
+    variant = "detect"
 
     def __init__(self, weights: Path | str | None = None, imgsz: int = 640,
                  conf: float = 0.25, max_side: int = 1920, model=None):

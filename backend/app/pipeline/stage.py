@@ -16,6 +16,9 @@ class FrameRef:
     frame_id: int
     pts: float
     crop: CropRect | None = None
+    # detector the session chose ("detect" | "segment"); stages that declare a `variant`
+    # run only when it matches (None: no gating)
+    variant: str | None = None
 
 
 @dataclass

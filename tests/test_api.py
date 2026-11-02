@@ -376,7 +376,8 @@ def test_app_from_env_refuses_to_start_with_placeholder(monkeypatch):
 
 
 def test_client_config_without_turn(client_factory):
-    assert client_factory().get("/client-config").json() == {"ice_servers": [], "require_token": False}
+    assert client_factory().get("/client-config").json() == {"ice_servers": [], "require_token": False,
+                                                              "models": []}
 
 
 class CountStage:

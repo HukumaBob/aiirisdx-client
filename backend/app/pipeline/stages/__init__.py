@@ -5,8 +5,10 @@ from app.pipeline.stages.anatomy import AnatomyStage
 from app.pipeline.stages.crop import CropStage
 from app.pipeline.stages.yolo_classify import YoloClassifyStage
 from app.pipeline.stages.yolo_detect import YoloDetectStage
+from app.pipeline.stages.yolo_segment import YoloSegmentStage
 
 register_stage("crop", CropStage)
 register_stage("yolo_detect", YoloDetectStage)
+register_stage("yolo_segment", YoloSegmentStage)
 register_stage("yolo_classify", YoloClassifyStage)
 register_stage("anatomy", AnatomyStage)

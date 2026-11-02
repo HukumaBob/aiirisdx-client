@@ -129,3 +129,37 @@ describe('camera that drops out and comes back', () => {
     expect(getUserMedia).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('model choice (detection / segmentation)', () => {
+  afterEach(() => vi.restoreAllMocks())
+  const makeDeps = (models: string[]) => {
+    const { deps } = setup(true)
+    const bodies: unknown[] = []
+    ;(deps as { fetch: unknown }).fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/client-config')) return { ok: true, status: 200, json: async () => ({ models }), text: async () => '' } as Response
+      if (String(url).endsWith('/sessions')) bodies.push(JSON.parse(String(init?.body)))
+      return { ok: true, status: 200, json: async () => ({ session_id: 'S', sdp: 'A', type: 'answer' }), text: async () => '' } as Response
+    })
+    return { deps, bodies }
+  }
+  it('offers the choice only when the server has both, and sends the pick at session start', async () => {
+    const { deps, bodies } = makeDeps(['detect', 'segment'])
+    render(<StationPage deps={deps} />)
+    fireEvent.change(screen.getByPlaceholderText('stand-1'), { target: { value: 'stand-1' } })
+    const select = await screen.findByTestId('model-select')
+    fireEvent.change(screen.getByPlaceholderText('новый врач'), { target: { value: 'Док' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+    fireEvent.change(select, { target: { value: 'segment' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Старт' }))
+    })
+    await waitFor(() => expect(bodies[0]).toMatchObject({ stand: 'stand-1', model: 'segment' }))
+  })
+  it('hides the select when the server offers a single model', async () => {
+    const { deps } = makeDeps(['detect'])
+    render(<StationPage deps={deps} />)
+    fireEvent.change(screen.getByPlaceholderText('stand-1'), { target: { value: 'stand-1' } })
+    await new Promise((r) => setTimeout(r, 600))
+    expect(screen.queryByTestId('model-select')).not.toBeInTheDocument()
+  })
+})

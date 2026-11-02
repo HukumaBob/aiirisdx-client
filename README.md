@@ -49,6 +49,7 @@ Everything is in `deploy/`: `docker-compose.yml`, `Dockerfile.backend`,
 cd deploy
 cp .env.example .env            # minimal: works as is (gpu profile, no TURN, no token)
 cp /path/to/detector.pt weights/detect.pt   # and set AIIRIS_DETECT_WEIGHTS=/weights/detect.pt
+# optional: a segmentation model next to it (the doctor picks per session): AIIRIS_SEGMENT_WEIGHTS
 docker compose up -d --build    # COMPOSE_PROFILES in .env selects gpu or cpu (+ turn)
 curl http://localhost:8080/api/health        # {"status":"ok","ready":true,...}
 ```

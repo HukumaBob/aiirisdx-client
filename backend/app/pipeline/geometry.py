@@ -21,3 +21,12 @@ def to_original_norm(box_px_xywh, ctx: dict) -> tuple[float, float, float, float
     x0, y0 = _clamp((x + ox) / W), _clamp((y + oy) / H)
     x1, y1 = _clamp((x + w + ox) / W), _clamp((y + h + oy) / H)
     return (x0, y0, x1 - x0, y1 - y0)
+
+
+def points_to_original_norm(points_px, ctx: dict) -> list[tuple[float, float]]:
+    """Map (x, y) points in WORKING-frame pixels to points normalized 0..1 of the ORIGINAL
+    frame (same convention as ``to_original_norm``; points are clamped into the frame)."""
+    wh, ww = ctx["frame"].shape[:2]
+    ox, oy = ctx.get("crop_offset", (0, 0))
+    W, H = ctx.get("orig_size", (ww, wh))
+    return [(_clamp((float(x) + ox) / W), _clamp((float(y) + oy) / H)) for x, y in points_px]

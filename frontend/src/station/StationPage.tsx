@@ -26,6 +26,7 @@ const IDLE_STATUS: FlowStatus = {
 }
 
 const REASON_RU = { stand: 'номер стойки', doctor: 'врач', file: 'путь к файлу' } as const
+const MODEL_RU: Record<string, string> = { detect: 'Детекция (рамки)', segment: 'Сегментация (контур)' }
 const STATE_RU: Record<FlowStatus['state'], string> = {
   idle: 'ожидание', starting: 'запуск…', running: 'идёт сеанс', 'server-lost': 'сервер потерян — запись продолжается',
   stopping: 'остановка…', finished: 'сеанс завершён', error: 'ошибка',
@@ -42,6 +43,8 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
   const [deviceId, setDeviceId] = useState('')
   const [mode, setMode] = useState<'live' | 'file'>('live')
   // live mode: the capture card / camera, or a video file from this computer played in the browser
+  // detectors the server offers (client-config); the select shows only when there is a choice
+  const [models, setModels] = useState<string[]>([])
   const [liveSource, setLiveSource] = useState<'camera' | 'local'>('camera')
   const [localFile, setLocalFile] = useState<File | null>(null)
   const localRef = useRef<{ video: HTMLVideoElement; url: string } | null>(null)
@@ -92,6 +95,19 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
     const t = setInterval(() => setStatus(flow.getStatus()), 500)
     return () => clearInterval(t)
   }, [active, flow])
+
+  // ---- detectors offered by the server (depends on the stand / token for authorization)
+  useEffect(() => {
+    if (!stand.trim()) return
+    let cancelled = false
+    const t = setTimeout(() => {
+      void flow.availableModels(stand, token).then((m) => !cancelled && setModels(m))
+    }, 400) // typing the stand name must not fire a request per keystroke
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [stand, token, flow])
 
   // ---- devices
   const refreshDevices = useCallback(async () => {
@@ -218,6 +234,7 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
       }
       await flow.start({
         stand, doctor, deviceId, mode, profile, filePath, realtime, token, sourceStream,
+        model: profile.model && models.includes(profile.model) ? profile.model : undefined,
         width: captureFormat.width, height: captureFormat.height, fps: captureFormat.fps,
         crop: cropOn ? crop : null,
       })
@@ -337,6 +354,14 @@ export function StationPage({ onFinished, deps }: StationPageProps) {
           </label>
           <fieldset disabled={!doctor}>
             <legend>Профиль врача</legend>
+            {models.length > 1 && (
+              <label title="Детекция — рамки; сегментация — контур находки. Применяется со следующего сеанса">Модель
+                <select data-testid="model-select" value={profile.model && models.includes(profile.model) ? profile.model : models[0]} disabled={active}
+                  onChange={(e) => patchProfile({ model: e.target.value as 'detect' | 'segment' })}>
+                  {models.map((m) => <option key={m} value={m}>{MODEL_RU[m] ?? m}</option>)}
+                </select>
+              </label>
+            )}
             <label>Порог сигнала: {profile.alertThreshold.toFixed(2)}
               <input type="range" min={0} max={1} step={0.05} value={profile.alertThreshold} onChange={(e) => patchProfile({ alertThreshold: Number(e.target.value) })} />
             </label>

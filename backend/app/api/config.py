@@ -6,7 +6,9 @@ Complex values are JSON in the environment, e.g.
 ``AIIRIS_TURN_URLS='["turn:turn.example:3478?transport=udp"]'`` + ``AIIRIS_TURN_SECRET``.
 
 Default pipeline (``AIIRIS_PIPELINE`` unset): ``crop``, ``yolo_detect`` (only if
-``AIIRIS_DETECT_WEIGHTS`` is set; otherwise skipped, no model is loaded), ``yolo_classify``
+``AIIRIS_DETECT_WEIGHTS`` is set; otherwise skipped, no model is loaded), ``yolo_segment``
+(only if ``AIIRIS_SEGMENT_WEIGHTS`` is set; the doctor then chooses detection or segmentation
+per session, see ``available_variants``), ``yolo_classify``
 (heads from ``AIIRIS_CLASSIFY_WEIGHTS`` JSON ``{"zone": "path.pt"}``; none => no-op stub),
 ``anatomy``.
 
@@ -44,6 +46,7 @@ class Settings(BaseSettings):
 
     pipeline: list[dict] | None = None  # [{"name":..., "params": {...}}]
     detect_weights: Path | None = None
+    segment_weights: Path | None = None  # optional segmentation model, offered next to detection
     classify_weights: dict[str, str] | None = None
     workers: int = Field(default=1, ge=1)
     queue_size: int = Field(default=8, ge=1)
@@ -97,12 +100,19 @@ class Settings(BaseSettings):
                         "credential": credential})
         return out
 
+    def available_variants(self) -> list[str]:
+        """Detectors the doctor can choose between: "detect" first, then "segment"."""
+        names = {c["name"] for c in self.pipeline_config()}
+        return [v for v, n in (("detect", "yolo_detect"), ("segment", "yolo_segment")) if n in names]
+
     def pipeline_config(self) -> list[dict]:
         if self.pipeline is not None:
             return self.pipeline
         cfg: list[dict] = [{"name": "crop"}]
         if self.detect_weights is not None:
             cfg.append({"name": "yolo_detect", "params": {"weights": str(self.detect_weights)}})
+        if self.segment_weights is not None:
+            cfg.append({"name": "yolo_segment", "params": {"weights": str(self.segment_weights)}})
         cfg.append({"name": "yolo_classify", "params": {"weights": self.classify_weights}})
         cfg.append({"name": "anatomy"})
         return cfg

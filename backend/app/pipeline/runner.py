@@ -39,6 +39,9 @@ class Pipeline:
         ctx: dict = {"labels": {}, "classification": {}, "detections": detections}
         self.last_errors = []
         for stage in self.stages:
+            sv = getattr(stage, "variant", None)
+            if sv is not None and ref.variant is not None and sv != ref.variant:
+                continue  # the doctor chose the other detector for this session
             try:
                 res = stage.process(frame, ref, ctx)
             except Exception as e:  # a failing stage must not crash the pipeline

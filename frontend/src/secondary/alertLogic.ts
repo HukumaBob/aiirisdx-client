@@ -19,6 +19,8 @@ export interface DoctorProfile {
    */
   bufferTimeoutMs?: number
   classThresholds?: Record<string, number>
+  /** detector for the session: 'detect' (boxes) or 'segment' (outlines); unset = the server's first */
+  model?: 'detect' | 'segment'
 }
 
 export const DEFAULT_PROFILE: DoctorProfile = { alertThreshold: 0.5, soundEnabled: false, bufferDelayMs: 1000 }

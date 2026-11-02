@@ -24,6 +24,7 @@ tests/test_loop_lag.py). ``Session.logged`` counts records that reached the file
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import re
 import time
@@ -32,6 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -90,6 +92,7 @@ class Session:
     closed: bool = False
     frames: int = 0
     crop: CropRect | None = None
+    variant: str | None = None  # chosen detector ("detect" | "segment"), see FrameRef.variant
     # one ingest kind per session (frame ids restart at 0 in file mode): None until the first
     # accepted /offer ("webrtc"; re-offers allowed) or /file ("file"; only one file)
     ingest_kind: str | None = None
@@ -175,6 +178,8 @@ class Core:
         if s is None or s.closed:
             return
         s.last_activity = self.clock()
+        if s.variant is not None:
+            ref = dataclasses.replace(ref, variant=s.variant)
         if self.pool.submit(frame, ref):
             s.submitted += 1
 
@@ -208,7 +213,8 @@ class Core:
         s.logged += 1
 
     # ---------------------------------------------------------------- session ops
-    def create(self, stand: str, doctor: str | None, crop: CropRect | None) -> Session:
+    def create(self, stand: str, doctor: str | None, crop: CropRect | None,
+               variant: str | None = None) -> Session:
         started = datetime.now(timezone.utc)
         key = uuidlib.uuid4().hex
         sid = f"{stand}_{started.strftime('%Y%m%dT%H%M%S')}_{key}"
@@ -216,10 +222,11 @@ class Core:
         d.mkdir(parents=True, exist_ok=False)
         header = LogHeader(schema_version=SCHEMA_VERSION,
                            session=SessionId(stand=stand, started_at=started, uuid=key),
-                           doctor=doctor, crop=crop, models=self.models,
+                           doctor=doctor, crop=crop, models=self.models, model_variant=variant,
                            taxonomy_version=self.settings.taxonomy_version)
         s = Session(sid, stand, key, LogWriter(d / "log.jsonl", header), d / "log.jsonl")
         s.crop = crop
+        s.variant = variant
         s.last_activity = self.clock()
         self.sessions[sid] = s
         self.by_key[key] = s
@@ -278,6 +285,7 @@ class CreateBody(BaseModel):
     stand: str = Field(pattern=STAND_RE)
     doctor: str | None = None
     crop: CropRect | None = None
+    model: Literal["detect", "segment"] | None = None  # None: the first available
 
 
 class OfferBody(BaseModel):
@@ -294,8 +302,12 @@ class FileBody(BaseModel):
 def create_session(body: CreateBody, request: Request):
     core = core_of(request)
     access.check_http(core.settings, body.stand, _token(request))
-    s = core.create(body.stand, body.doctor, body.crop)
-    return {"session_id": s.session_id}
+    available = core.settings.available_variants()
+    if body.model is not None and available and body.model not in available:
+        raise HTTPException(422, f"model {body.model!r} is not available (have: {available})")
+    variant = body.model or (available[0] if available else None)
+    s = core.create(body.stand, body.doctor, body.crop, variant)
+    return {"session_id": s.session_id, "model": variant}
 
 
 @router.post("/sessions/{session_id}/offer")
@@ -413,7 +425,8 @@ def client_config(request: Request, stand: str | None = None):
             raise HTTPException(401, "missing stand (?stand=) and stand token")
         access.check_http(settings, stand, _token(request))
     return {"ice_servers": settings.ice_servers_now(stand or "stand"),
-            "require_token": settings.require_token}
+            "require_token": settings.require_token,
+            "models": settings.available_variants()}
 
 
 @router.get("/sessions/{session_id}")

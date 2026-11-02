@@ -54,15 +54,24 @@ doctor's name.
 ## log.jsonl
 
 Line 1, header: `{"type":"header","schema_version":"1.0","session":{...},"doctor":...,
-"crop":{...}|null,"models":{"stage":"version"},"taxonomy_version":"..."}`.
+"crop":{...}|null,"models":{"stage":"version"},"model_variant":"detect"|"segment"|null,
+"taxonomy_version":"..."}`.
 `crop` in the header is the same rectangle as in the manifest (original pixels).
+`model_variant` is the detector the doctor chose for the session: `detect` (boxes) or
+`segment` (boxes + outlines); `null` when the pipeline offered no such choice. `models` lists
+the versions of every loaded stage, including the one that was not chosen.
 
 Frame records: `{"type":"frame","frame_id":int,"pts":float,"detections":[{"bbox":[x,y,w,h],
-"class_name":str,"confidence":0..1}],"classification":{"zone":..,"quality":..,"mode":..},
+"class_name":str,"confidence":0..1,"polygon":[[x,y],...]|null}],"classification":{"zone":..,"quality":..,"mode":..},
 "anatomy":{"status":..}|null,"dropped":bool}`.
 
 - `bbox`: xywh, normalized 0..1 of the **original, uncropped** frame (`manifest.source`),
   even though inference ran on the cropped region.
+- `polygon` (segmentation sessions only, otherwise absent / `null`): the outline of the finding,
+  3..256 points `[x, y]` normalized 0..1 of the same original frame, in drawing order, implicitly
+  closed. It is a simplified contour (Douglas-Peucker, at most ~96 points) of the model's mask;
+  readers should smooth it when drawing (the reference client does). Additive field of schema
+  1.0: a reader that ignores it still sees the same `bbox`.
 - `dropped: true`: the server received the frame but skipped inference under overload
   (no detections; it is not "nothing found").
 - A frame id that is absent from the log never reached the server (the browser encoder did

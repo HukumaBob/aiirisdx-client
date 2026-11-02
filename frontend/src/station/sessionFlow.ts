@@ -63,6 +63,8 @@ export interface StartParams {
    * screen. Its end is the file's end, not a lost signal.
    */
   sourceStream?: MediaStream
+  /** detector to use on the server ('detect' | 'segment'); omitted = the server's default */
+  model?: string
 }
 
 export function canStart(p: Pick<StartParams, 'stand' | 'doctor' | 'mode' | 'filePath'>): { ok: boolean; reasons: ('stand' | 'doctor' | 'file')[] } {
@@ -293,6 +295,21 @@ export class SessionFlow {
     }
   }
 
+  /** detectors the server offers ('detect', 'segment'); [] when unknown / server unreachable */
+  async availableModels(stand: string, token?: string): Promise<string[]> {
+    try {
+      const headers: Record<string, string> = {}
+      const t = token?.trim() || this.deps.token
+      if (t) headers['X-Stand-Token'] = t
+      const r = await this.deps.fetch(`${this.deps.base}/client-config?stand=${encodeURIComponent(stand.trim())}`, { method: 'GET', headers })
+      if (!r.ok) return []
+      const j = (await r.json()) as { models?: unknown }
+      return Array.isArray(j?.models) ? j.models.filter((m): m is string => typeof m === 'string') : []
+    } catch {
+      return []
+    }
+  }
+
   private async http(path: string, init: { method: string; body?: unknown; timeoutMs?: number } ): Promise<Response> {
     const headers: Record<string, string> = {}
     if (init.body !== undefined) headers['Content-Type'] = 'application/json'
@@ -318,6 +335,7 @@ export class SessionFlow {
     const p = this.params!
     const body: Record<string, unknown> = { stand: p.stand.trim(), doctor: p.doctor.trim() }
     if (p.crop) body.crop = p.crop
+    if (p.model) body.model = p.model
     const r = await this.http('/sessions', { method: 'POST', body })
     const j = (await r.json()) as { session_id: string }
     if (!j?.session_id) throw new Error('POST /sessions: no session_id')

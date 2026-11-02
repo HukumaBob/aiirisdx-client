@@ -105,3 +105,66 @@ describe('ResultsClient against the server rejection sequence (accept, then clos
     })
   }
 })
+
+describe('segment look', () => {
+  const rec = () => {
+    const calls: string[] = []
+    const ctx = new Proxy({} as Record<string, unknown>, {
+      get: (t, k: string) => (k in t ? t[k] : (..._a: unknown[]) => { calls.push(k) }),
+      set: (t, k: string, v) => { t[k] = v; return true },
+    }) as unknown as CanvasRenderingContext2D
+    ;(ctx as unknown as { measureText: () => { width: number } }).measureText = () => ({ width: 40 })
+    return { ctx, calls }
+  }
+  const tri: [number, number][] = [[0.2, 0.2], [0.5, 0.2], [0.35, 0.5]]
+
+  it('a finding with an outline is filled and stroked as a smooth path, not as brackets', () => {
+    const { ctx, calls } = rec()
+    drawBoxes(ctx, [{ bbox: [0.2, 0.2, 0.3, 0.3], class_name: 'polyp', confidence: 0.8, polygon: tri }], 960, 540)
+    expect(calls.filter((c) => c === 'quadraticCurveTo')).toHaveLength(3) // one curve per vertex
+    expect(calls).toContain('fill')
+    expect(calls.filter((c) => c === 'stroke').length).toBeGreaterThanOrEqual(2) // rim + bright line
+    expect(calls).not.toContain('arcTo') // the box brackets use arcTo
+    expect(calls).toContain('fillText') // label plate
+  })
+  it('a box without an outline (or with fewer than 3 points) keeps the bracket look', () => {
+    for (const polygon of [undefined, null, [[0.1, 0.1], [0.2, 0.2]] as [number, number][]]) {
+      const { ctx, calls } = rec()
+      drawBoxes(ctx, [{ bbox: [0.2, 0.2, 0.3, 0.3], class_name: 'polyp', confidence: 0.8, polygon }], 960, 540)
+      expect(calls).toContain('arcTo')
+      expect(calls).not.toContain('quadraticCurveTo')
+    }
+  })
+  it('the segment style does not leak into the next box', () => {
+    // a context with a real save/restore stack, recording the line width at every arcTo
+    const state: Record<string, unknown> = { lineWidth: 1, strokeStyle: '#000', fillStyle: '#000' }
+    const stack: Record<string, unknown>[] = []
+    const widths: unknown[] = []
+    const styles: unknown[] = []
+    const ctx = new Proxy(state, {
+      get: (t, k: string) => {
+        if (k === 'save') return () => stack.push({ ...t })
+        if (k === 'restore') return () => Object.assign(t, stack.pop())
+        if (k === 'measureText') return () => ({ width: 40 })
+        if (k === 'arcTo') return () => { widths.push(t.lineWidth); styles.push(t.strokeStyle) }
+        return k in t ? t[k] : () => {}
+      },
+      set: (t, k: string, v) => { t[k] = v; return true },
+    }) as unknown as CanvasRenderingContext2D
+    drawBoxes(ctx, [
+      { bbox: [0.2, 0.2, 0.3, 0.3], class_name: 'polyp', confidence: 0.8, polygon: tri },
+      { bbox: [0.6, 0.6, 0.2, 0.2], class_name: 'polyp', confidence: 0.7 },
+    ], 960, 540)
+    const scale = 540 / 500
+    expect(widths.length).toBeGreaterThan(0)
+    expect(widths.every((w) => w === 1.5 * scale)).toBe(true)
+    expect(styles.every((c) => c === '#00ffef')).toBe(true)
+  })
+  it('smoothClosedPath starts at an edge midpoint and ends closed', async () => {
+    const { smoothClosedPath } = await import('../src/secondary/boxRenderer')
+    const moves: number[][] = []
+    const ctx = { beginPath() {}, moveTo: (x: number, y: number) => moves.push([x, y]), quadraticCurveTo() {}, closePath() {} } as unknown as CanvasRenderingContext2D
+    smoothClosedPath(ctx, [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }])
+    expect(moves).toEqual([[5, 5]]) // midpoint of the closing edge (last -> first)
+  })
+})

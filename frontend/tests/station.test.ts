@@ -252,6 +252,36 @@ describe('session flow', () => {
     expect(t.recorder.start).not.toHaveBeenCalled()
   })
 
+  it('the chosen model is sent when the session is created; omitted otherwise', async () => {
+    const t = setup()
+    await new SessionFlow(t.deps).start(params({ model: 'segment' } as Partial<StartParams>))
+    expect(t.calls[0]).toMatchObject({ url: '/api/sessions', body: { model: 'segment' } })
+    const t2 = setup()
+    await new SessionFlow(t2.deps).start(params())
+    expect(t2.calls[0].body).not.toHaveProperty('model')
+  })
+
+  it('availableModels reads client-config and is [] when unknown, unreachable or malformed', async () => {
+    const t = setup({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ models: ['detect', 'segment', 7] }) }) as unknown as Response })
+    const flow = new SessionFlow({ ...t.deps, token: 'tok' })
+    expect(await flow.availableModels(' stand-1 ')).toEqual(['detect', 'segment'])
+    expect(t.calls[0]).toMatchObject({ url: '/api/client-config?stand=stand-1', method: 'GET', headers: { 'X-Stand-Token': 'tok' } })
+    const bad = setup({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ models: 'x' }) }) as unknown as Response })
+    expect(await new SessionFlow(bad.deps).availableModels('s')).toEqual([])
+    const down = setup({ fetchImpl: async () => { throw new TypeError('down') } })
+    expect(await new SessionFlow(down.deps).availableModels('s')).toEqual([])
+    const denied = setup({ fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) as unknown as Response })
+    expect(await new SessionFlow(denied.deps).availableModels('s')).toEqual([])
+  })
+
+  it('the profile keeps a valid model choice and drops anything else', async () => {
+    const { sanitizeProfile } = await import('../src/station/profiles')
+    expect(sanitizeProfile({ model: 'segment' }).model).toBe('segment')
+    expect(sanitizeProfile({ model: 'detect' }).model).toBe('detect')
+    expect(sanitizeProfile({ model: 'rt-detr' }).model).toBeUndefined()
+    expect(sanitizeProfile({}).model).toBeUndefined()
+  })
+
   it('X-Stand-Token header is sent when a token is set', async () => {
     const t = setup()
     const flow = new SessionFlow({ ...t.deps, token: 'tok' })
